@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: space-probe-log-backend
+Version: 0.1.0
+Requires-Python: >=3.12
+Requires-Dist: alembic>=1.13.2
+Requires-Dist: fastapi>=0.111.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: pydantic-settings>=2.3.4
+Requires-Dist: sqlalchemy>=2.0.31
+Requires-Dist: uvicorn[standard]>=0.30.1
+Provides-Extra: dev
+Requires-Dist: pytest>=8.2.2; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23.7; extra == "dev"

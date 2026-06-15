@@ -1,0 +1,24 @@
+{
+  "name": "space-probe-log-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --host 0.0.0.0 --port 3000",
+    "build": "nuxt build",
+    "preview": "nuxt preview --host 0.0.0.0 --port 3000",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@pinia/nuxt": "^0.5.1",
+    "nuxt": "^3.12.4",
+    "pinia": "^2.1.7",
+    "three": "^0.166.1",
+    "vue": "^3.4.31"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@types/three": "^0.184.1",
+    "typescript": "^5.5.3",
+    "vue-tsc": "^2.0.26"
+  }
+}

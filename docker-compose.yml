@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:////data/space_probe_log.db
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      DEFAULT_WORLD_SEED: sol-neighborhood-001
+    volumes:
+      - backend-data:/data
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NUXT_PUBLIC_API_BASE: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  backend-data:
