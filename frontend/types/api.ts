@@ -42,7 +42,14 @@ export interface LogDetail extends LogListItem {
   related_body_ids: string[]
   probe_state_snapshot: Record<string, unknown>
   communication_status: string
-  observations: Array<{ type: string; value: string; reliability: number }>
+  observations: Array<{
+    type: string
+    value: string
+    reliability: number
+    sighting_level?: 'detected' | 'resolved' | 'confirmed'
+    source?: string | null
+    distance_hint?: string | null
+  }>
   interpretations: Array<{ hypothesis: string; confidence: number }>
 }
 
@@ -64,15 +71,93 @@ export interface StarSystem {
 }
 
 export interface MapPayload {
-  systems: Array<{ id: string; name: string; x: number; y: number; z: number; has_life: boolean; kind?: string; object_role?: string }>
-  bodies: Array<{ id: string; system_id: string; name: string; type: string; x: number; y: number; z: number; radius: number; object_role?: string }>
+  systems: Array<{
+    id: string
+    name: string
+    x: number
+    y: number
+    z: number
+    has_life: boolean
+    kind?: string
+    object_role?: string
+    source?: 'jpl_horizons' | 'nasa_exoplanet_archive' | 'generated' | 'manual' | string
+    visual_data?: {
+      texture_key?: string
+      color_profile?: string[]
+      opacity?: number
+      emissive?: string
+      emission_strength?: number
+      albedo_color?: string
+      roughness?: number
+      ring?: {
+        inner_radius?: number
+        outer_radius?: number
+        texture_key?: string
+        tilt?: number
+        opacity?: number
+        color?: string
+      }
+    }
+  }>
+  bodies: Array<{
+    id: string
+    system_id: string
+    name: string
+    type: string
+    x: number
+    y: number
+    z: number
+    radius: number
+    object_role?: string
+    source?: 'jpl_horizons' | 'nasa_exoplanet_archive' | 'generated' | 'manual' | string
+    visual_data?: {
+      texture_key?: string
+      color_profile?: string[]
+      opacity?: number
+      emissive?: string
+      emission_strength?: number
+      albedo_color?: string
+      roughness?: number
+      ring?: {
+        inner_radius?: number
+        outer_radius?: number
+        texture_key?: string
+        tilt?: number
+        opacity?: number
+        color?: string
+      }
+    }
+  }>
   signals: Array<{ id: string; system_id: string; kind: string; x: number; y: number; z: number; investigated: boolean; object_role?: string }>
+  environment_objects?: Array<{
+    id: string
+    name: string
+    object_type: 'nebula' | 'dust_cloud' | 'anomaly_region' | string
+    x: number
+    y: number
+    z: number
+    scale: { x: number; y: number; z: number }
+    rotation: { x: number; y: number; z: number }
+    source?: string
+    nebula_type?: string
+    visual_data?: {
+      texture_key?: string
+      color_profile?: string[]
+      opacity?: number
+      emission_strength?: number
+      emissive?: string
+    }
+    details?: Record<string, unknown>
+  }>
   probe: { id: string; name: string; x: number; y: number; z: number; system_id: string; target_id?: string | null }
   route: Array<{ x: number; y: number; z: number }>
   route_prediction?: { target_id: string; target_name: string; from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number } } | null
+  primary_route_prediction?: { target_id: string; target_name: string; from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number } } | null
+  navigation_intent?: 'main_route' | 'detour_signal' | 'survey' | 'resource' | 'recovery' | string | null
   map_origin?: { id: string; name: string; x: number; y: number; z: number }
   focus?: { x: number; y: number; z: number }
   distant_stars?: Array<{ id: string; x: number; y: number; z: number; size: number; brightness: number; color: string }>
+  real_data_epoch?: string | null
 }
 
 export interface SimulationStep {

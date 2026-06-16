@@ -23,7 +23,8 @@ from app.world.generator import generate_world
 
 
 def reset_world(db: Session, world_seed: str | None = None) -> Probe:
-    seed = world_seed or get_settings().default_world_seed
+    requested_seed = (world_seed or "").strip()
+    seed = requested_seed or f"reset-{utcnow().isoformat()}"
     for model in [
         Discovery,
         ExplorationLog,
@@ -100,18 +101,20 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
                     details=signal.details,
                 )
             )
+    db.flush()
+    earth = db.get(CelestialBody, "earth")
     probe = Probe(
         id="probe-aurora",
         name="INSOMNIA-07",
         universe_id=universe.id,
         current_system_id="sol",
         target_id=None,
-        x=1.0,
-        y=0.02,
-        z=0.0,
-        display_x=7.1,
-        display_y=0.2,
-        display_z=0.0,
+        x=earth.sim_x if earth else 1.0,
+        y=earth.sim_y if earth else 0.03,
+        z=earth.sim_z if earth else 0.17,
+        display_x=earth.display_x if earth else 7.1,
+        display_y=earth.display_y if earth else 0.2,
+        display_z=earth.display_z if earth else 0.0,
         velocity=0.0,
         energy=100.0,
         fuel=100.0,
@@ -122,10 +125,11 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         storage_used=4.0,
         storage_capacity=100.0,
         current_mission="太陽系外縁へ向かう段階航行",
-        discovered_body_ids=["sun", "earth", "mars", "jupiter"],
+        discovered_body_ids=["sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune"],
         collected_resources={},
         mission_time=0,
     )
+    probe.current_mission = "太陽系外縁へ向かう段階航行"
     db.add(probe)
     probe_profile, action_policy, log_writer_style = load_prompt_defaults()
     db.add(

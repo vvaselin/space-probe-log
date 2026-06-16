@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { pickTextureSet } from '~/assets/texture/registry'
 import type { MapPayload } from '~/types/api'
 
 const props = defineProps<{ payload: MapPayload; compact?: boolean; followTick?: number; hideToolbar?: boolean }>()
@@ -10,6 +11,14 @@ let cleanup: (() => void) | null = null
 let followProbe: (() => void) | null = null
 
 type Selectable = THREE.Object3D & { userData: { label: string } }
+type LodEntry = {
+  mesh: THREE.Object3D
+  point: THREE.Points
+  ring?: THREE.Object3D
+  near: number
+  far: number
+  keepVisible?: boolean
+}
 
 function vectorFrom(point: { x: number; y: number; z: number }) {
   return new THREE.Vector3(point.x, point.y, point.z)
@@ -24,8 +33,21 @@ onMounted(() => {
   scene.fog = new THREE.FogExp2(0x030812, 0.0022)
 
   const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 3000)
-  const focus = props.payload.focus ? vectorFrom(props.payload.focus) : vectorFrom(props.payload.probe)
-  camera.position.copy(focus.clone().add(new THREE.Vector3(props.compact ? 26 : 52, props.compact ? 18 : 34, props.compact ? 34 : 66)))
+  const solarOverview = props.payload.probe.system_id === 'sol' && !props.payload.probe.target_id
+  const focus = solarOverview
+    ? new THREE.Vector3(0, 0, 0)
+    : props.payload.focus
+      ? vectorFrom(props.payload.focus)
+      : vectorFrom(props.payload.probe)
+  camera.position.copy(
+    focus.clone().add(
+      new THREE.Vector3(
+        props.compact ? 26 : solarOverview ? 64 : 52,
+        props.compact ? 18 : solarOverview ? 42 : 34,
+        props.compact ? 34 : solarOverview ? 92 : 66,
+      ),
+    ),
+  )
 
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setSize(width, height)
@@ -50,14 +72,157 @@ onMounted(() => {
   controls.target.copy(focus)
 
   const selectable: Selectable[] = []
-  const systemMaterial = new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0x775012, roughness: 0.42 })
+  const lodEntries: LodEntry[] = []
+  const targetId = props.payload.probe.target_id ?? props.payload.route_prediction?.target_id ?? null
+  const systemMaterial = new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0xa56a16, roughness: 0.42 })
   const farObjectiveMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff })
   const waypointMaterial = new THREE.MeshBasicMaterial({ color: 0xdbeafe, transparent: true, opacity: 0.92 })
-  const planetMaterial = new THREE.MeshStandardMaterial({ color: 0x58a7ff, emissive: 0x0e2f62, roughness: 0.68 })
-  const earthMaterial = new THREE.MeshStandardMaterial({ color: 0x6ee7b7, emissive: 0x105640, roughness: 0.55 })
+  const rockyMaterial = new THREE.MeshStandardMaterial({ color: 0xb8a58d, emissive: 0x28190f, roughness: 0.88 })
+  const earthMaterial = new THREE.MeshStandardMaterial({ color: 0x5fa8ff, emissive: 0x123d2a, roughness: 0.55 })
+  const gasMaterial = new THREE.MeshStandardMaterial({ color: 0x9fc4ff, emissive: 0x233764, roughness: 0.72 })
+  const iceMaterial = new THREE.MeshStandardMaterial({ color: 0xbad9ff, emissive: 0x17304c, roughness: 0.62 })
+  const moonMaterial = new THREE.MeshStandardMaterial({ color: 0xb7b2ab, emissive: 0x141414, roughness: 0.94 })
   const lifeMaterial = new THREE.MeshStandardMaterial({ color: 0x78f5bd, emissive: 0x0d4b33, roughness: 0.55 })
   const signalMaterial = new THREE.MeshStandardMaterial({ color: 0xff5c8a, emissive: 0x7a1230, roughness: 0.3 })
   const probeMaterial = new THREE.MeshStandardMaterial({ color: 0xf8fbff, emissive: 0x244a8f, roughness: 0.35, metalness: 0.25 })
+  const textureLoader = new THREE.TextureLoader()
+  const textureCache = new Map<string, THREE.Texture>()
+  const loadTexture = (url?: string) => {
+    if (!url) return undefined
+    const cached = textureCache.get(url)
+    if (cached) return cached
+    const texture = textureLoader.load(url)
+    texture.colorSpace = THREE.SRGBColorSpace
+    texture.wrapS = THREE.RepeatWrapping
+    texture.wrapT = THREE.RepeatWrapping
+    textureCache.set(url, texture)
+    return texture
+  }
+  const texturedStandardMaterial = (textureKey: string | undefined, fallback: THREE.MeshStandardMaterial) => {
+    const textureSet = pickTextureSet(textureKey)
+    const map = loadTexture(textureSet?.albedo)
+    const roughnessMap = loadTexture(textureSet?.roughness)
+    const emissionMap = loadTexture(textureSet?.emission)
+    if (!map && !roughnessMap && !emissionMap) return fallback
+    return new THREE.MeshStandardMaterial({
+      color: fallback.color,
+      emissive: fallback.emissive,
+      roughness: fallback.roughness,
+      metalness: fallback.metalness,
+      map,
+      roughnessMap,
+      emissiveMap: emissionMap,
+      emissiveIntensity: emissionMap ? 0.75 : 0.25,
+    })
+  }
+  const bodyFallbackMaterial = (body: MapPayload['bodies'][number]) => {
+    if (body.type === 'star') return systemMaterial
+    if (body.id === 'earth' || body.object_role === 'origin_body') return earthMaterial
+    if (body.type === 'gas_giant') return gasMaterial
+    if (body.type === 'ice_planet' || body.type === 'ice_world') return iceMaterial
+    if (body.type === 'moon' || body.type === 'asteroid' || body.type === 'comet') return moonMaterial
+    return rockyMaterial
+  }
+  const lodColorForBody = (body: MapPayload['bodies'][number]) => {
+    if (body.type === 'star') return 0xffefb0
+    if (body.id === 'earth' || body.object_role === 'origin_body') return 0xc8fff0
+    if (body.type === 'gas_giant') return 0xd7e6ff
+    if (body.type === 'ice_planet' || body.type === 'ice_world') return 0xe3f2ff
+    if (body.type === 'moon' || body.type === 'asteroid' || body.type === 'comet') return 0xdad6d1
+    return 0xf2d3c1
+  }
+  const cloudMaterials: THREE.ShaderMaterial[] = []
+  const cloudMeshes: THREE.Mesh[] = []
+  const createCloudMaterial = (options: {
+    noise?: THREE.Texture
+    mask?: THREE.Texture
+    colorA: THREE.Color
+    colorB: THREE.Color
+    colorC: THREE.Color
+    opacity: number
+    emissionStrength: number
+    nebulaType?: string
+    objectType: string
+  }) => {
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uNoise: { value: options.noise ?? null },
+        uMask: { value: options.mask ?? options.noise ?? null },
+        uColorA: { value: options.colorA },
+        uColorB: { value: options.colorB },
+        uColorC: { value: options.colorC },
+        uOpacity: { value: options.opacity },
+        uEmissionStrength: { value: options.emissionStrength },
+        uTime: { value: 0 },
+        uDark: { value: options.objectType === 'dust_cloud' || options.nebulaType === 'dark' ? 1.0 : 0.0 },
+        uRing: { value: options.nebulaType === 'planetary' || options.nebulaType === 'supernova_remnant' ? 1.0 : 0.0 },
+        uAnomaly: { value: options.objectType === 'anomaly_region' ? 1.0 : 0.0 },
+        uReflection: { value: options.nebulaType === 'reflection' ? 1.0 : 0.0 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uNoise;
+        uniform sampler2D uMask;
+        uniform vec3 uColorA;
+        uniform vec3 uColorB;
+        uniform vec3 uColorC;
+        uniform float uOpacity;
+        uniform float uEmissionStrength;
+        uniform float uTime;
+        uniform float uDark;
+        uniform float uRing;
+        uniform float uAnomaly;
+        uniform float uReflection;
+        varying vec2 vUv;
+
+        float levelRange(float value, float minInput, float maxInput) {
+          return clamp((value - minInput) / (maxInput - minInput), 0.0, 1.0);
+        }
+
+        void main() {
+          vec2 centered = vUv - vec2(0.5);
+          float radius = length(centered);
+          float ovalMask = smoothstep(0.52, 0.16, radius);
+          float ringMask = smoothstep(0.50, 0.36, radius) * smoothstep(0.18, 0.30, radius);
+          float shapeMask = mix(ovalMask, ringMask, uRing);
+
+          vec2 driftA = vec2(uTime * 0.010, -uTime * 0.014);
+          vec2 driftB = vec2(-uTime * 0.006, uTime * 0.008 + 0.21);
+          float n1 = texture2D(uNoise, vUv * 1.35 + driftA).r;
+          float n2 = texture2D(uNoise, vUv * 2.20 + driftB).r;
+          float maskNoise = texture2D(uMask, vUv + centered * (0.18 + n1 * 0.16)).r;
+          float cloud = levelRange((n1 + n2 + maskNoise) * 0.38, 0.22, 0.72);
+          float edge = smoothstep(0.58, 0.08, radius + (n2 - 0.5) * 0.16);
+          float ringFill = mix(1.0, smoothstep(0.20, 0.04, abs(radius - 0.32)), uRing * 0.35);
+          float alpha = cloud * shapeMask * edge * ringFill * uOpacity;
+
+          float blendAB = clamp(n1 * 0.7 + n2 * 0.45, 0.0, 1.0);
+          float blendBC = clamp(maskNoise * 0.9 + n2 * 0.3, 0.0, 1.0);
+          vec3 color = mix(uColorA, uColorB, blendAB);
+          color = mix(color, uColorC, blendBC * 0.55);
+          color = mix(color, vec3(0.03, 0.05, 0.09), uDark * 0.68);
+          color += vec3(0.20, 0.05, 0.35) * uAnomaly * n2;
+          float glowMask = pow(clamp(cloud * 0.82 + maskNoise * 0.48, 0.0, 1.0), 1.55);
+          vec3 glowColor = mix(uColorB, uColorC, 0.45 + uAnomaly * 0.15);
+          float glowStrength = mix(uEmissionStrength * 0.55, uEmissionStrength, uReflection);
+          color += glowColor * glowMask * glowStrength;
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: options.objectType === 'dust_cloud' || options.nebulaType === 'dark' ? THREE.NormalBlending : THREE.AdditiveBlending,
+    })
+    cloudMaterials.push(material)
+    return material
+  }
 
   const starPositions: number[] = []
   const starColors: number[] = []
@@ -84,10 +249,37 @@ onMounted(() => {
   )
   scene.add(starPoints)
 
+  const createLodPoint = (position: THREE.Vector3, colorValue = 0xffffff, size = 2.2) => {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([position.x, position.y, position.z], 3))
+    const point = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({
+        color: colorValue,
+        size,
+        transparent: true,
+        opacity: 0.86,
+        sizeAttenuation: false,
+        depthWrite: false,
+      })
+    )
+    point.visible = false
+    scene.add(point)
+    return point
+  }
+
   for (const system of props.payload.systems) {
     const isFarObjective = system.object_role === 'far_objective'
     const isWaypoint = system.object_role === 'navigation_waypoint'
-    const material = isWaypoint ? waypointMaterial : isFarObjective ? farObjectiveMaterial : system.has_life ? lifeMaterial : systemMaterial
+    const baseMaterial = system.has_life ? lifeMaterial : systemMaterial
+    const material = isWaypoint
+      ? waypointMaterial
+      : isFarObjective
+        ? farObjectiveMaterial
+        : texturedStandardMaterial(system.visual_data?.texture_key, baseMaterial)
+    if (material instanceof THREE.MeshStandardMaterial && system.visual_data?.emissive) {
+      material.emissive = new THREE.Color(system.visual_data.emissive)
+    }
     const radius = isWaypoint ? 0.72 : isFarObjective ? 1.8 : system.id === 'sol' ? 1.45 : 1.05
     const geometry = isWaypoint ? new THREE.OctahedronGeometry(radius, 0) : new THREE.SphereGeometry(radius, 32, 20)
     const mesh = new THREE.Mesh(geometry, material)
@@ -104,17 +296,66 @@ onMounted(() => {
     ring.position.copy(mesh.position)
     ring.rotation.x = Math.PI / 2
     scene.add(ring)
+    const point = createLodPoint(mesh.position, isWaypoint || isFarObjective ? 0xffffff : 0xf8fbff, isFarObjective || system.id === targetId ? 3.0 : 2.2)
+    point.userData.label = mesh.userData.label
+    selectable.push(point as unknown as Selectable)
+    lodEntries.push({
+      mesh,
+      ring,
+      point,
+      near: isWaypoint ? 135 : isFarObjective ? 180 : 150,
+      far: isFarObjective || system.id === targetId ? 1400 : 780,
+      keepVisible: system.id === targetId || isFarObjective,
+    })
   }
 
   for (const body of props.payload.bodies) {
+    const bodyMaterial = texturedStandardMaterial(body.visual_data?.texture_key, bodyFallbackMaterial(body))
+    if (body.visual_data?.emissive) {
+      bodyMaterial.emissive = new THREE.Color(body.visual_data.emissive)
+    }
+    if (typeof body.visual_data?.roughness === 'number') {
+      bodyMaterial.roughness = body.visual_data.roughness
+    }
+    if (body.type === 'star') {
+      bodyMaterial.emissiveIntensity = body.visual_data?.emission_strength ?? 1.25
+    }
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(Math.max(0.24, body.radius * 1.05), 24, 16),
-      body.object_role === 'origin_body' ? earthMaterial : planetMaterial
+      bodyMaterial
     )
     mesh.position.set(body.x, body.y, body.z)
     mesh.userData.label = `${body.name} / ${body.type}`
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
+    if (body.visual_data?.ring) {
+      const ringVisual = body.visual_data.ring
+      const ringTexture = loadTexture(pickTextureSet(ringVisual.texture_key)?.alpha ?? pickTextureSet(ringVisual.texture_key)?.albedo)
+      const ringMaterial = new THREE.MeshBasicMaterial({
+        color: ringVisual.color ?? '#d9d1b0',
+        map: ringTexture,
+        transparent: true,
+        opacity: ringVisual.opacity ?? 0.7,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(
+          (ringVisual.inner_radius ?? 1.5) * body.radius,
+          (ringVisual.outer_radius ?? 2.3) * body.radius,
+          72,
+        ),
+        ringMaterial,
+      )
+      ring.position.copy(mesh.position)
+      ring.rotation.set(Math.PI / 2 + (ringVisual.tilt ?? 0), 0, 0.22)
+      scene.add(ring)
+      lodEntries.push({ mesh: ring, point: createLodPoint(mesh.position, lodColorForBody(body), 1.8), near: 110, far: 260 })
+    }
+    const point = createLodPoint(mesh.position, lodColorForBody(body), 1.8)
+    point.userData.label = mesh.userData.label
+    selectable.push(point as unknown as Selectable)
+    lodEntries.push({ mesh, point, near: body.object_role === 'origin_body' ? 95 : 82, far: 280 })
   }
 
   for (const signal of props.payload.signals) {
@@ -122,6 +363,45 @@ onMounted(() => {
     mesh.position.set(signal.x, signal.y, signal.z)
     mesh.userData.label = `${signal.id} / ${signal.kind}`
     scene.add(mesh)
+    selectable.push(mesh as unknown as Selectable)
+    const point = createLodPoint(mesh.position, 0xffdbe6, signal.investigated ? 1.4 : 1.9)
+    point.userData.label = mesh.userData.label
+    selectable.push(point as unknown as Selectable)
+    lodEntries.push({ mesh, point, near: 90, far: 260 })
+  }
+
+  for (const item of props.payload.environment_objects ?? []) {
+    const textureSet = pickTextureSet(item.visual_data?.texture_key)
+    const noise = loadTexture(textureSet?.noise ?? textureSet?.albedo ?? textureSet?.emission)
+    const mask = loadTexture(textureSet?.alpha ?? textureSet?.noise)
+    const details = item.details ?? {}
+    const colorProfile = Array.isArray(details.color_profile) ? details.color_profile : item.visual_data?.color_profile
+    const colorValue = typeof colorProfile?.[0] === 'string' ? colorProfile[0] : item.object_type === 'anomaly_region' ? '#c084fc' : '#8fd3ff'
+    const colorValueB = typeof colorProfile?.[1] === 'string' ? colorProfile[1] : item.object_type === 'dust_cloud' ? '#172033' : '#f8fafc'
+    const colorValueC = typeof colorProfile?.[2] === 'string' ? colorProfile[2] : item.object_type === 'anomaly_region' ? '#f8fafc' : '#fff4cc'
+    const opacity = item.visual_data?.opacity ?? (typeof details.opacity === 'number' ? details.opacity : item.object_type === 'dust_cloud' ? 0.18 : 0.28)
+    const emissionStrength =
+      item.visual_data?.emission_strength ??
+      (typeof details.emission_strength === 'number' ? details.emission_strength : item.object_type === 'dust_cloud' ? 0.12 : 0.9)
+    const nebulaType = typeof details.nebula_type === 'string' ? details.nebula_type : item.nebula_type
+    const material = createCloudMaterial({
+      noise,
+      mask,
+      colorA: new THREE.Color(colorValue),
+      colorB: new THREE.Color(colorValueB),
+      colorC: new THREE.Color(colorValueC),
+      opacity,
+      emissionStrength,
+      nebulaType,
+      objectType: item.object_type,
+    })
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 16, 16), material)
+    mesh.position.set(item.x, item.y, item.z)
+    mesh.scale.set(item.scale.x, item.scale.y, item.scale.z)
+    mesh.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z)
+    mesh.userData.label = `${item.name} / ${item.object_type}`
+    scene.add(mesh)
+    cloudMeshes.push(mesh)
     selectable.push(mesh as unknown as Selectable)
   }
 
@@ -166,7 +446,17 @@ onMounted(() => {
     scene.add(prediction)
   }
 
+  if (props.payload.primary_route_prediction) {
+    const primary = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([vectorFrom(props.payload.primary_route_prediction.from), vectorFrom(props.payload.primary_route_prediction.to)]),
+      new THREE.LineDashedMaterial({ color: 0xf8fbff, transparent: true, opacity: 0.22, dashSize: 7.0, gapSize: 4.0 })
+    )
+    primary.computeLineDistances()
+    scene.add(primary)
+  }
+
   const raycaster = new THREE.Raycaster()
+  raycaster.params.Points = { threshold: 4 }
   const pointer = new THREE.Vector2()
   const click = (event: MouseEvent) => {
     const rect = renderer.domElement.getBoundingClientRect()
@@ -205,6 +495,9 @@ onMounted(() => {
     frame = requestAnimationFrame(animate)
     probe.rotation.y += 0.014
     probeMarker.rotation.z += 0.01
+    const time = performance.now() * 0.001
+    for (const material of cloudMaterials) material.uniforms.uTime.value = time
+    for (const mesh of cloudMeshes) mesh.lookAt(camera.position)
     if (cameraTween) {
       cameraTween.t = Math.min(1, cameraTween.t + 0.045)
       const eased = 1 - Math.pow(1 - cameraTween.t, 3)
@@ -214,6 +507,14 @@ onMounted(() => {
     }
     const distance = camera.position.distanceTo(controls.target)
     starPoints.visible = distance > 8
+    for (const entry of lodEntries) {
+      const objectDistance = camera.position.distanceTo(entry.mesh.position)
+      const isNear = objectDistance <= entry.near
+      const isTooFar = objectDistance > entry.far && !entry.keepVisible
+      entry.mesh.visible = isNear && !isTooFar
+      entry.point.visible = !isNear && !isTooFar
+      if (entry.ring) entry.ring.visible = isNear && !isTooFar
+    }
     controls.update()
     renderer.render(scene, camera)
   }
@@ -225,6 +526,12 @@ onMounted(() => {
     window.removeEventListener('resize', resize)
     renderer.dispose()
     starGeometry.dispose()
+    for (const entry of lodEntries) {
+      entry.point.geometry.dispose()
+      const material = entry.point.material
+      if (Array.isArray(material)) material.forEach((item) => item.dispose())
+      else material.dispose()
+    }
     host.value?.replaceChildren()
     followProbe = null
   }
@@ -244,6 +551,7 @@ onBeforeUnmount(() => cleanup?.())
       <span class="map-legend map-legend--waypoint">航行点</span>
       <span class="map-legend map-legend--planet">天体</span>
       <span class="map-legend map-legend--signal">信号</span>
+      <span class="map-chip">航行: {{ payload.navigation_intent ?? 'main_route' }}</span>
     </div>
   </div>
 </template>

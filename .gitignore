@@ -1,6 +1,7 @@
 backend/.env
 backend/*.db
 backend/*.log
+backend/*.venv
 frontend/.env
 frontend/.nuxt
 frontend/.output

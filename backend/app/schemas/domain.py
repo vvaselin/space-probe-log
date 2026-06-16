@@ -22,6 +22,9 @@ class ObservationFact(BaseModel):
     type: str
     value: str
     reliability: float = Field(ge=0.0, le=1.0)
+    sighting_level: Literal["detected", "resolved", "confirmed"] = "confirmed"
+    source: str | None = None
+    distance_hint: str | None = None
 
 
 class Interpretation(BaseModel):
@@ -189,12 +192,16 @@ class MapPayload(BaseModel):
     systems: list[dict[str, Any]]
     bodies: list[dict[str, Any]]
     signals: list[dict[str, Any]]
+    environment_objects: list[dict[str, Any]] = Field(default_factory=list)
     probe: dict[str, Any]
     route: list[dict[str, float]]
     route_prediction: dict[str, Any] | None = None
+    primary_route_prediction: dict[str, Any] | None = None
+    navigation_intent: str | None = None
     map_origin: dict[str, Any] | None = None
     focus: dict[str, float] | None = None
     distant_stars: list[dict[str, Any]] = Field(default_factory=list)
+    real_data_epoch: str | None = None
 
 
 class SimulationStepResponse(BaseModel):

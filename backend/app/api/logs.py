@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.repositories.read import discoveries_for_events, log_by_id, logs
+from app.repositories.read import discoveries_for_events, events_for_log, log_by_id, logs
 from app.schemas.domain import LogDetail, LogListItem
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
@@ -19,11 +19,20 @@ def get_log(log_id: int, db: Session = Depends(get_db)):
     if log is None:
         raise HTTPException(status_code=404, detail="log not found")
     discoveries = discoveries_for_events(db, log.related_event_ids)
-    observations = [
-        {"type": item.observation_type, "value": item.value, "reliability": item.reliability}
-        for item in discoveries
-    ]
-    interpretations = [interp for item in discoveries for interp in item.interpretations]
+    events = events_for_log(db, log)
+    observations = []
+    for event in events:
+        observations.extend(event.data.get("observations", []))
+    if not observations:
+        observations = [
+            {"type": item.observation_type, "value": item.value, "reliability": item.reliability, "sighting_level": "confirmed"}
+            for item in discoveries
+        ]
+    interpretations = []
+    for event in events:
+        interpretations.extend(event.data.get("interpretations", []))
+    if not interpretations:
+        interpretations = [interp for item in discoveries for interp in item.interpretations]
     return {
         "id": log.id,
         "title": log.title,
