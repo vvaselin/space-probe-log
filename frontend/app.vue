@@ -13,9 +13,12 @@ onBeforeUnmount(() => {
   if (clockTimer !== null) window.clearInterval(clockTimer)
 })
 
-const presets = computed(() => store.simulationSettings?.time_scale_presets ?? [1, 10000, 100000, 500000])
+const presets = computed(() => (store.simulationSettings?.time_scale_presets ?? [1, 10000, 100000, 500000]).filter((preset) => preset > 0))
 const selectedScale = computed({
-  get: () => store.clock?.time_scale ?? 500000,
+  get: () => {
+    const currentScale = store.clock?.time_scale ?? 0
+    return currentScale > 0 ? currentScale : presets.value[0] ?? 500000
+  },
   set: (value: number) => {
     void store.setTimeScale(Number(value))
   }
@@ -36,18 +39,11 @@ const selectedScale = computed({
           TIME
           <select v-model.number="selectedScale">
             <option v-for="preset in presets" :key="preset" :value="preset">
-              {{ preset === 0 ? 'PAUSE' : `x${preset.toLocaleString()}` }}
+              {{ `x${preset.toLocaleString()}` }}
             </option>
           </select>
         </label>
         <strong>{{ store.clock?.clock_state === 'paused' ? 'PAUSED' : 'RUNNING' }}</strong>
-        <button
-          type="button"
-          class="sim-hud__button"
-          @click="store.setClockState(store.clock?.clock_state === 'paused' ? 'running' : 'paused')"
-        >
-          {{ store.clock?.clock_state === 'paused' ? 'Resume' : 'Pause' }}
-        </button>
       </div>
     </nav>
     <NuxtPage />

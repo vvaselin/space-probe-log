@@ -652,17 +652,18 @@ onMounted(() => {
       }
       probeMotion.resumeMotion(effectiveTimeScale())
     },
-    { flush: 'sync' },
+    { flush: 'sync', immediate: true },
   )
   const animate = () => {
     frame = requestAnimationFrame(animate)
     const now = performance.now()
     const deltaSeconds = Math.min(0.08, (now - lastFrameAt) / 1000)
     lastFrameAt = now
-    if (!isMotionPaused()) probeMotion.updateFrame(deltaSeconds, now)
+    const motionPaused = isMotionPaused()
+    if (!motionPaused) probeMotion.updateFrame(deltaSeconds, now)
     probe.position.copy(probeCurrentAnchor).add(probeVisualOffset)
     probeMarker.position.copy(probeCurrentAnchor)
-    if (!isMotionPaused()) {
+    if (!motionPaused) {
       probe.rotation.y += 0.014
       probeMarker.rotation.z += 0.01
       updateDynamicRouteLine()
@@ -677,7 +678,7 @@ onMounted(() => {
     const time = performance.now() * 0.001
     for (const material of cloudMaterials) material.uniforms.uTime.value = time
     for (const mesh of cloudMeshes) mesh.lookAt(camera.position)
-    if (!isMotionPaused()) followCamera.update(probeCurrentAnchor)
+    if (!motionPaused) followCamera.update(probeCurrentAnchor)
     const distance = camera.position.distanceTo(controls.target)
     starPoints.visible = distance > 8
     for (const entry of lodEntries) {

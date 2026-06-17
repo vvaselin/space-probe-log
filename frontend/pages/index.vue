@@ -8,7 +8,7 @@ const logError = ref<string | null>(null)
 const followEnabled = ref(false)
 
 onMounted(() => store.loadAll())
-onBeforeUnmount(() => store.stopCruise())
+onBeforeUnmount(() => store.stopCruiseTimer())
 
 const mapKey = computed(() => {
   const map = store.map
@@ -26,6 +26,7 @@ const mapKey = computed(() => {
 const route = computed(() => store.navigation ?? store.probe?.navigation ?? null)
 const missionClock = computed(() => store.clock?.mission_clock ?? store.probe?.mission_clock ?? '2080/05/02 12:00:00 UTC')
 const selectedLogBody = computed(() => renderMarkdown(selectedLog.value?.body_markdown ?? ''))
+const isCruisePaused = computed(() => store.clock?.clock_state !== 'running')
 
 function logClock(log: LogListItem | LogDetail) {
   const clock = log.probe_position?.mission_clock
@@ -185,7 +186,7 @@ function renderMarkdown(markdown: string) {
     </aside>
 
     <div class="hud-controls">
-      <button v-if="!store.cruiseRunning" :disabled="store.loading" @click="store.startCruise">巡航開始</button>
+      <button v-if="isCruisePaused" :disabled="store.loading" @click="store.startCruise">巡航開始</button>
       <button v-else :disabled="store.loading" @click="store.stopCruise">一時停止</button>
       <button class="button-secondary" type="button" :class="{ 'is-active': followEnabled }" @click="followEnabled = !followEnabled">
         {{ followEnabled ? '追尾解除' : '探査機を追尾' }}

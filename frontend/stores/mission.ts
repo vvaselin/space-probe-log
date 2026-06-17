@@ -70,6 +70,12 @@ export const useMissionStore = defineStore('mission', () => {
     return Boolean(navigation.value?.active || map.value?.probe.navigation?.active || probe.value?.target_id)
   }
 
+  function cruiseTimeScale() {
+    const currentScale = clock.value?.time_scale ?? 0
+    if (currentScale > 0) return currentScale
+    return simulationSettings.value?.time_scale_presets.find((preset) => preset > 0) ?? 500000
+  }
+
   async function loadAll() {
     loading.value = true
     error.value = null
@@ -138,26 +144,54 @@ export const useMissionStore = defineStore('mission', () => {
       await refreshClock()
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'API error'
-      stopCruise()
+      stopCruiseTimer()
     } finally {
       loading.value = false
     }
   }
 
-  function startCruise() {
-    if (tickTimer.value) return
-    cruiseRunning.value = true
-    void runTick()
-    tickTimer.value = setInterval(() => {
-      void runTick()
-    }, 1800)
-  }
-
-  function stopCruise() {
+  function stopCruiseTimer() {
     cruiseRunning.value = false
     if (tickTimer.value) {
       clearInterval(tickTimer.value)
       tickTimer.value = null
+    }
+  }
+
+  async function startCruise() {
+    if (tickTimer.value) return
+    error.value = null
+    try {
+      cruiseRunning.value = true
+      const timeScale = cruiseTimeScale()
+      if (clock.value && (clock.value.clock_state === 'paused' || clock.value.time_scale === 0)) {
+        applyClockSnapshot({ ...clock.value, time_scale: timeScale, clock_state: 'running' })
+      }
+      const updatedClock = await api.updateClock({ time_scale: timeScale, clock_state: 'running' })
+      applyClockSnapshot(updatedClock)
+      if (hasActiveNavigation()) await syncNavigationState()
+      void runTick()
+      tickTimer.value = setInterval(() => {
+        void runTick()
+      }, 1800)
+    } catch (err) {
+      stopCruiseTimer()
+      error.value = err instanceof Error ? err.message : 'API error'
+    }
+  }
+
+  async function stopCruise() {
+    error.value = null
+    try {
+      stopCruiseTimer()
+      if (clock.value && clock.value.clock_state !== 'paused') {
+        applyClockSnapshot({ ...clock.value, clock_state: 'paused' })
+      }
+      const updatedClock = await api.updateClock({ clock_state: 'paused' })
+      applyClockSnapshot(updatedClock)
+      if (hasActiveNavigation()) await syncNavigationState()
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'API error'
     }
   }
 
@@ -220,7 +254,7 @@ export const useMissionStore = defineStore('mission', () => {
 
   async function setClockState(clock_state: 'running' | 'paused') {
     if (clock.value && clock_state === 'paused') {
-      stopCruise()
+      stopCruiseTimer()
       applyClockSnapshot({ ...clock.value, clock_state })
     }
     const updatedClock = await api.updateClock({ clock_state })
@@ -229,8 +263,9 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function setTimeScale(time_scale: number) {
-    const clock_state = time_scale === 0 ? 'paused' : 'running'
+    const clock_state = time_scale === 0 ? 'paused' : clock.value?.clock_state ?? 'running'
     if (clock.value && clock_state === 'paused') {
+      stopCruiseTimer()
       applyClockSnapshot({ ...clock.value, time_scale, clock_state })
     }
     const updatedClock = await api.updateClock({ time_scale, clock_state })
@@ -251,7 +286,7 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function reset() {
-    stopCruise()
+    stopCruiseTimer()
     stopNavigationSync()
     await api.reset()
     await loadAll()
@@ -282,6 +317,7 @@ export const useMissionStore = defineStore('mission', () => {
     syncNavigationState,
     startNavigationSync,
     stopNavigationSync,
+    stopCruiseTimer,
     loadSimulationSettings,
     saveSimulationSettings,
     savePrompts,

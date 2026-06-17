@@ -62,22 +62,27 @@ export function useProbeMotion(initialPayload: MapPayload) {
 
   const updateSnapshot = (payload: MapPayload) => {
     const now = performance.now()
+    const wasPaused = paused || snapshot.timeScale === 0
+    const frozenPosition = renderedPosition.clone()
     const previousPredictedPosition = authoritativePosition(now)
     const next = snapshotFromPayload(payload)
     const nextPaused = next.timeScale === 0
+    if (wasPaused || nextPaused) {
+      renderedPosition.copy(frozenPosition)
+      snapshot = {
+        ...next,
+        position: frozenPosition,
+        receivedAt: now,
+        timeScale: 0,
+      }
+      paused = true
+      return
+    }
     const destinationChanged = snapshot.targetId !== next.targetId
     const arrived = next.phase === 'arrived'
     const deactivated = snapshot.active && !next.active
     const wasInactive = !snapshot.active && next.active
     const tooFar = squaredDistance(pointFrom(renderedPosition), pointFrom(next.position)) > snapDistance * snapDistance
-    if (nextPaused) {
-      paused = true
-      snapshot = next
-      renderedPosition.copy(next.position)
-      snapshot.position.copy(renderedPosition)
-      snapshot.receivedAt = now
-      return
-    }
     if (destinationChanged || arrived || deactivated || wasInactive || tooFar) {
       paused = false
       snapshot = next
@@ -102,7 +107,7 @@ export function useProbeMotion(initialPayload: MapPayload) {
   }
 
   const pauseMotion = (now = performance.now()) => {
-    const frozenPosition = authoritativePosition(now)
+    const frozenPosition = renderedPosition.clone()
     renderedPosition.copy(frozenPosition)
     snapshot = {
       ...snapshot,
