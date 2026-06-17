@@ -1,19 +1,69 @@
 # Space Probe Log
 
-架空の宇宙探査機 AURORA-7 の探査ログ閲覧サイトです。FastAPI が世界データと探査機状態の正本を管理し、Nuxt 3 + Three.js がダッシュボード、ログ、3D宇宙マップを表示します。
+INSOMNIA-07 の探査ログ閲覧・航行シミュレーションサイトです。FastAPI が世界データ、探査機状態、シミュレーション時計、航行状態の正本を管理し、Nuxt 3 + Three.js がダッシュボード、ログ、3D宇宙マップを表示します。
 
-## 実装範囲
+## Features
 
-- 太陽系と3つのシード生成された架空恒星系
-- 探査機状態、行動検証、イベント、状態履歴、観測事実、解釈、ログ保存
-- `move`, `observe`, `investigate_signal`, `collect_resource`, `wait`
-- LLM抽象化、モックLLM、OpenAI互換APIクライアント
-- REST APIとNuxt画面 `/`, `/logs`, `/logs/[id]`, `/map`, `/probe`
-- Three.jsによる星、惑星、信号、探査機、航路表示
+- INSOMNIA-07 の状態、航行、観測、資源採取、ログ閲覧
+- REST API と Nuxt 画面 `/`, `/logs`, `/logs/[id]`, `/map`, `/probe`, `/settings`
+- Three.js による星、惑星、信号、探査機、航路表示
+- LLM は行動提案とログ文生成だけを担当し、距離・速度・ETAなどの物理量はPython側で確定します。
 
-発展機能は未実装です。遅延銀河生成、文明交流、自動実行、RAGなどはサービス層や座標分離を拡張して追加する想定です。
+## INSOMNIA-07
 
-## 起動
+- 探査機名: INSOMNIA-07
+- 内部ID: `probe-insomnia-07`
+- 種別: 長寿命恒星間無人探査船
+- 本体: 全長18 m、幅6 m、高さ5 m
+- アンテナ・放熱板展開時最大幅: 28 m
+- 出発時質量: 42,000 kg
+- 乾燥質量: 30,000 kg
+- 推進剤質量: 4,000 kg
+- 修理・資源加工用原料: 8,000 kg
+- 通常恒星間巡航速度: 0.08c、約23,983 km/s
+- 最大巡航速度: 0.12c、約35,975 km/s
+- 想定運用期間: 500年以上
+- 恒星系内航行: 通常推進
+- 恒星間航行: ピアノドライブ
+- 防御: 前方多層シールド
+- 機能: 自己修復、資源採取、資源加工、長期休眠
+
+物理仕様の正本はバックエンドの `ProbeSpecification` です。Markdownやプロンプトは説明用で、APIやログに渡す物理量はPython側で計算します。
+
+## Simulation Clock
+
+シミュレーション時計はバックエンドDBが正本です。
+
+- `simulation_datetime`: 現在のシミュレーション日時
+- `time_scale`: 現実時間に対する倍率
+- `clock_state`: `running` または `paused`
+- `last_real_datetime`: 最後に時計を確定した現実日時
+
+時計更新時は、前回更新からの現実経過秒に `time_scale` を掛けてシミュレーション日時へ反映します。ページを閉じている間も、設定に応じて時間が進みます。
+
+デフォルト倍率は `360x` です。
+
+- `PAUSE`: 一時停止
+- `360x`: 現実の1分 = シミュレーション内の6時間
+- `1,440x`: 現実の1分 = シミュレーション内の1日
+- `10,080x`: 現実の1分 = シミュレーション内の1週間
+- `525,600x`: 現実の1分 = シミュレーション内の1年
+
+開発中の意図しない大幅進行を避けるため、オフライン進行のON/OFFと反映上限を `/settings` から変更できます。初期上限は現実時間24時間です。
+
+## Coordinates And Scale
+
+物理座標と表示座標は分離しています。
+
+- 恒星系間の物理位置: `StarSystem.x/y/z` をpc相当として扱います。
+- 恒星系内の物理位置: `CelestialBody.orbit_radius_km` やAU/km系の値を使います。
+- 探査機の物理航行状態: `ProbeNavigationState` に距離、速度、ETA、フェーズを保存します。
+- Three.js表示座標: `display_x/display_y/display_z`
+- Three.js表示半径: `display_radius`
+
+表示座標上の距離や半径は描画専用です。航行距離や所要時間の計算には使用しません。
+
+## Development
 
 ```bash
 docker compose up --build
@@ -22,9 +72,7 @@ docker compose up --build
 - Frontend: http://localhost:3000
 - Backend: http://localhost:8000/api/health
 
-初回アクセス時に開発用テーブルが作成され、API呼び出し時に初期ワールドが生成されます。
-
-## Backend
+Backend:
 
 ```bash
 cd backend
@@ -34,11 +82,7 @@ uvicorn app.main:app --reload
 pytest
 ```
 
-ローカルに Python 3.12+ がない場合は Docker を使ってください。
-
-## Frontend
-
-Windows PowerShell では `npm.cmd` を使います。
+Frontend:
 
 ```bash
 cd frontend
@@ -47,17 +91,12 @@ npm.cmd run dev
 npm.cmd run typecheck
 ```
 
-## 設計判断
+## Clock Operations
 
-- LLMの提案は `ProposedAction` として検証し、Python側で対象存在、燃料、エネルギー、センサー、推進系、ストレージを確認します。
-- LLMはDB状態を直接変更できません。確定した観測事実と解釈は `Discovery` に保存されます。
-- ログ本文はLLMまたはモックが生成しますが、失敗時はテンプレート文にフォールバックします。
-- LLMへ渡すプロンプトは `backend/app/prompts/*.md` で編集できます。
-- 物理データ、シミュレーション座標、表示座標、表示半径を分けています。
-- SQLiteを既定にし、`DATABASE_URL` でPostgreSQLへ移行可能にしています。
+- 現在時計: `GET /api/simulation/clock`
+- 一時停止/再開/倍率変更: `PATCH /api/simulation/clock`
+- 開発用時計リセット: `POST /api/simulation/clock/reset`
+- 全ワールド初期化: `POST /api/simulation/reset`
+- シミュレーション設定: `GET/PATCH /api/settings/simulation`
 
-## 既知の制限
-
-- 最小構成のため認証、管理画面、自動実行、WebSocket/SSEは未実装です。
-- Three.js表示は簡易スケールで、物理的な距離・半径の完全再現ではありません。
-- OpenAI互換APIは汎用HTTP実装のみで、プロンプトは最小です。
+`POST /api/simulation/reset` は世界、探査機、ログ、航行状態、時計を初期化します。時計だけを初期化したい場合は `POST /api/simulation/clock/reset` を使います。

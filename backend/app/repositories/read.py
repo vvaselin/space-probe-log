@@ -19,7 +19,7 @@ def active_universe(db: Session) -> Universe | None:
 
 
 def current_probe(db: Session) -> Probe | None:
-    return db.scalar(select(Probe).order_by(Probe.id).limit(1))
+    return db.scalar(select(Probe).where(Probe.id == "probe-insomnia-07").limit(1)) or db.scalar(select(Probe).order_by(Probe.id).limit(1))
 
 
 def systems(db: Session) -> list[StarSystem]:
@@ -56,9 +56,9 @@ def discoveries_for_events(db: Session, event_ids: list[int]) -> list[Discovery]
     return list(db.scalars(select(Discovery).where(Discovery.event_id.in_(event_ids))).all())
 
 
-def route_points(db: Session) -> list[dict[str, float]]:
+def route_points(db: Session, probe: Probe | None = None) -> list[dict[str, float]]:
     histories = db.scalars(select(ProbeStateHistory).order_by(ProbeStateHistory.mission_time)).all()
-    return [
+    points = [
         {
             "x": item.snapshot["display_x"],
             "y": item.snapshot["display_y"],
@@ -66,6 +66,11 @@ def route_points(db: Session) -> list[dict[str, float]]:
         }
         for item in histories
     ]
+    if probe is not None:
+        current = {"x": probe.display_x, "y": probe.display_y, "z": probe.display_z}
+        if not points or any(abs(points[-1][axis] - current[axis]) > 1e-6 for axis in ["x", "y", "z"]):
+            points.append(current)
+    return points
 
 
 def events_for_log(db: Session, log: ExplorationLog) -> list[SimulationEvent]:

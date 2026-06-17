@@ -278,6 +278,35 @@ async def test_frontier_targets_are_added_after_initial_targets_are_consumed(db)
 
 
 @pytest.mark.asyncio
+async def test_outer_terminus_continues_to_outward_frontier(db) -> None:
+    probe = reset_world(db)
+    objective = db.get(StarSystem, "sys-outer-terminus")
+    assert objective is not None
+    probe.current_system_id = objective.id
+    probe.target_id = None
+    probe.x, probe.y, probe.z = objective.x, objective.y, objective.z
+    probe.display_x, probe.display_y, probe.display_z = objective.display_x, objective.display_y, objective.display_z
+    for system in db.query(StarSystem).all():
+        db.add(ProbeStateHistory(probe_id=probe.id, mission_time=probe.mission_time, snapshot={"current_system_id": system.id}))
+    db.commit()
+
+    action, event, log, probe, route = await run_tick(db, MockLLMClient())
+
+    assert action.validated_action == "move"
+    assert probe.target_id is not None
+    assert probe.target_id.startswith("frontier-")
+    target = db.get(StarSystem, probe.target_id)
+    assert target is not None
+    probe_radius = math.sqrt(objective.x**2 + objective.y**2 + objective.z**2)
+    target_radius = math.sqrt(target.x**2 + target.y**2 + target.z**2)
+    dot = (objective.x * target.x + objective.y * target.y + objective.z * target.z) / (probe_radius * target_radius)
+    assert target_radius > probe_radius
+    assert dot > 0
+    assert route is not None
+    assert route["phase"] == "course_plotted"
+
+
+@pytest.mark.asyncio
 async def test_long_run_keeps_moving_outward_without_stagnating(db) -> None:
     probe = reset_world(db)
     start_radius = _display_radius((probe.display_x, probe.display_y, probe.display_z))

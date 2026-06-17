@@ -4,7 +4,7 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.time import utcnow
@@ -15,6 +15,7 @@ from app.models import (
     Discovery,
     ExplorationLog,
     Probe,
+    ProbeNavigationState,
     ProbeStateHistory,
     ResourceInventory,
     Signal,
@@ -34,6 +35,15 @@ from app.schemas.domain import (
 )
 from app.services.action_validation import ValidationResult, validate_action
 from app.services.reset import reset_world
+from app.services.clock import advance_simulation_clock, ensure_simulation_clock
+from app.services.navigation import (
+    active_navigation_state,
+    begin_navigation,
+    latest_navigation_state,
+    navigation_payload,
+    synchronize_navigation,
+)
+from app.services.probe_spec import PROBE_ID, PROBE_LEGACY_IDS, PROBE_NAME, probe_specification
 from app.services.snapshots import probe_snapshot
 from app.world.generator import SystemSpec, frontier_shell_systems, stable_seed
 
@@ -56,6 +66,19 @@ def _lerp(a: float, b: float, t: float) -> float:
 
 def _display_radius(point: tuple[float, float, float]) -> float:
     return math.sqrt(point[0] ** 2 + point[1] ** 2 + point[2] ** 2)
+
+
+def _physical_radius(point: tuple[float, float, float]) -> float:
+    return math.sqrt(point[0] ** 2 + point[1] ** 2 + point[2] ** 2)
+
+
+def _physical_outward_score(probe: Probe, item: StarSystem) -> tuple[float, float]:
+    probe_vector = (probe.x, probe.y, probe.z)
+    item_vector = (item.x, item.y, item.z)
+    probe_radius = max(_physical_radius(probe_vector), 1e-9)
+    item_radius = _physical_radius(item_vector)
+    dot = sum(left * right for left, right in zip(probe_vector, item_vector, strict=True)) / max(probe_radius * max(item_radius, 1e-9), 1e-9)
+    return item_radius, dot
 
 
 def display_probe_offset(target: StarSystem) -> tuple[float, float, float]:
@@ -85,8 +108,12 @@ def ensure_probe(db: Session) -> Probe:
     probe = current_probe(db)
     if probe is None:
         return reset_world(db)
-    if probe.name != "INSOMNIA-07":
-        probe.name = "INSOMNIA-07"
+    if probe.id in PROBE_LEGACY_IDS and db.get(Probe, PROBE_ID) is None:
+        for model in [ProbeStateHistory, SimulationAction, SimulationEvent, Discovery, ResourceInventory, ProbeNavigationState]:
+            db.execute(update(model).where(model.probe_id == probe.id).values(probe_id=PROBE_ID))
+        probe.id = PROBE_ID
+    if probe.name != PROBE_NAME:
+        probe.name = PROBE_NAME
         db.commit()
         db.refresh(probe)
     return probe
@@ -165,14 +192,15 @@ def ensure_frontier_targets(db: Session, probe: Probe, min_unvisited: int = 4) -
     if universe is None:
         return
     visited = _visited_system_ids(db, probe)
-    probe_radius = _display_radius((probe.display_x, probe.display_y, probe.display_z))
+    probe_radius = _physical_radius((probe.x, probe.y, probe.z))
     known_systems = systems(db)
     available = [
         item
         for item in known_systems
         if item.id != probe.current_system_id
         and item.id not in visited
-        and _display_radius((item.display_x, item.display_y, item.display_z)) >= probe_radius + 0.5
+        and _physical_outward_score(probe, item)[0] >= probe_radius + 0.5
+        and _physical_outward_score(probe, item)[1] > 0.05
     ]
     if len(available) >= min_unvisited:
         return
@@ -182,10 +210,26 @@ def ensure_frontier_targets(db: Session, probe: Probe, min_unvisited: int = 4) -
         if item.details.get("object_role") == "frontier_system"
     ]
     next_ring = max(frontier_rings, default=0) + 1
-    farthest_radius = max([probe_radius, *[_display_radius((item.display_x, item.display_y, item.display_z)) for item in known_systems]])
-    base_radius = max(10.0, farthest_radius / 18)
-    for spec in frontier_shell_systems(_world_seed(db), next_ring, base_radius):
-        _persist_system_spec(db, universe.id, spec)
+    farthest_radius = max([probe_radius, *[_physical_radius((item.x, item.y, item.z)) for item in known_systems]])
+    base_radius = max(10.0, farthest_radius + 1.5)
+    outward_vector = (probe.x, probe.y, probe.z)
+    shells_added = 0
+    while len(available) < min_unvisited and shells_added < 8:
+        for spec in frontier_shell_systems(_world_seed(db), next_ring, base_radius, outward_vector=outward_vector):
+            _persist_system_spec(db, universe.id, spec)
+        db.flush()
+        known_systems = systems(db)
+        available = [
+            item
+            for item in known_systems
+            if item.id != probe.current_system_id
+            and item.id not in visited
+            and _physical_outward_score(probe, item)[0] >= probe_radius + 0.5
+            and _physical_outward_score(probe, item)[1] > 0.05
+        ]
+        next_ring += 1
+        base_radius += 1.5
+        shells_added += 1
     db.flush()
 
 
@@ -198,9 +242,9 @@ def _visited_system_ids(db: Session, probe: Probe) -> set[str]:
 
 
 def _navigation_score(probe: Probe, item: StarSystem, visited: set[str]) -> tuple[int, int, int, float, str]:
-    probe_radius = _display_radius((probe.display_x, probe.display_y, probe.display_z))
-    item_radius = _display_radius((item.display_x, item.display_y, item.display_z))
-    outward_penalty = 0 if item_radius >= probe_radius + 0.5 else 1
+    probe_radius = _physical_radius((probe.x, probe.y, probe.z))
+    item_radius, outward_alignment = _physical_outward_score(probe, item)
+    outward_penalty = 0 if item_radius >= probe_radius + 0.5 and outward_alignment > 0.05 else 1
     visited_penalty = 1 if item.id in visited else 0
     order = int(item.details.get("navigation_order", 50))
     outward_distance = max(0.0, item_radius - probe_radius)
@@ -211,6 +255,11 @@ def action_context(db: Session, probe: Probe) -> ActionContext:
     ensure_frontier_targets(db, probe)
     current = system_detail(db, probe.current_system_id)
     prompt_settings = get_prompt_settings(db)
+    nav_state = latest_navigation_state(db, probe)
+    probe_context = probe_snapshot(probe)
+    if nav_state:
+        probe_context["navigation"] = navigation_payload(probe, nav_state)
+    probe_context["specification"] = probe_specification().model_dump(mode="json")
     visible_signals = []
     if not probe.target_id and current:
         visible_signals = [
@@ -218,6 +267,8 @@ def action_context(db: Session, probe: Probe) -> ActionContext:
             for signal in current.signals
             if not signal.investigated
         ]
+    if current and current.details.get("object_role") == MAIN_BEACON_ROLE:
+        visible_signals = []
     visited = _visited_system_ids(db, probe)
     all_systems = [item for item in systems(db) if item.discovered]
     nearby = [
@@ -249,7 +300,7 @@ def action_context(db: Session, probe: Probe) -> ActionContext:
         for item in navigation_systems
     ]
     return ActionContext(
-        probe=probe_snapshot(probe),
+        probe=probe_context,
         nearby_systems=nearby,
         navigation_targets=navigation_targets,
         visible_signals=visible_signals,
@@ -398,6 +449,16 @@ def navigation_director(db: Session, probe: Probe, context: ActionContext, propo
         return ProposedAction(action="move", target_id=probe.target_id, reason="航行中の目標へ向けて主航路を維持します。"), "main_route"
 
     current = system_detail(db, probe.current_system_id)
+    target = _main_route_target(context)
+    if current and current.details.get("object_role") == MAIN_BEACON_ROLE and target and probe.propulsion >= 25:
+        return (
+            ProposedAction(
+                action="move",
+                target_id=target["id"],
+                reason=f"Continue outward from the outer terminus toward frontier target {target['name']}.",
+            ),
+            _navigation_intent(ProposedAction(action="move", target_id=target["id"], reason="frontier route"), target),
+        )
     has_uninvestigated_signal = bool(context.visible_signals)
     if has_uninvestigated_signal and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
         signal = context.visible_signals[0]
@@ -1051,12 +1112,19 @@ def _deterministic_cruise_action(db: Session, probe: Probe, context: ActionConte
     scripted = scripted_initial_action(probe)
     if scripted:
         return scripted, "main_route"
+    current = system_detail(db, probe.current_system_id)
+    target = _main_route_target(context)
+    if current and current.details.get("object_role") == MAIN_BEACON_ROLE and target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Continue outward from the outer terminus toward frontier target {target['name']}."), "main_route"
+    current = system_detail(db, probe.current_system_id)
+    target = _main_route_target(context)
+    if current and current.details.get("object_role") == MAIN_BEACON_ROLE and target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Continue outward from the outer terminus toward frontier target {target['name']}."), "main_route"
     if context.visible_signals and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
         signal = context.visible_signals[0]
         return ProposedAction(action="investigate_signal", target_id=signal["id"], reason="現在地で未調査の信号を確認する。"), "detour_signal"
     if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
         return ProposedAction(action="collect_resource", reason="巡航継続に必要な燃料を確保する。"), "resource"
-    target = _main_route_target(context)
     if target and probe.propulsion >= 25:
         return ProposedAction(action="move", target_id=target["id"], reason=f"{target['name']}へ向けて主航路を進む。"), "main_route"
     return ProposedAction(action="wait", reason="実行可能な巡航行動がないため、姿勢制御と通信同期を維持する。"), "recovery"
@@ -1075,6 +1143,24 @@ def _recent_log_exists(db: Session, probe: Probe, within: int = CRUISE_LOG_COOLD
 def _phase_logged(db: Session, phase: str) -> bool:
     events = db.scalars(select(SimulationEvent).order_by(SimulationEvent.id.desc()).limit(200)).all()
     return any(event.data.get("log_phase") == phase for event in events)
+
+
+def _deterministic_cruise_action(db: Session, probe: Probe, context: ActionContext) -> tuple[ProposedAction, str]:
+    scripted = scripted_initial_action(probe)
+    if scripted:
+        return scripted, "main_route"
+    current = system_detail(db, probe.current_system_id)
+    target = _main_route_target(context)
+    if current and current.details.get("object_role") == MAIN_BEACON_ROLE and target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Continue outward from the outer terminus toward frontier target {target['name']}."), "main_route"
+    if context.visible_signals and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
+        signal = context.visible_signals[0]
+        return ProposedAction(action="investigate_signal", target_id=signal["id"], reason="Investigate the unprocessed local signal before continuing."), "detour_signal"
+    if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
+        return ProposedAction(action="collect_resource", reason="Collect available resources before continuing cruise."), "resource"
+    if target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Plot main route toward {target['name']}."), "main_route"
+    return ProposedAction(action="wait", reason="Hold attitude and communications; no executable cruise action is available."), "recovery"
 
 
 def _log_decision(
@@ -1185,6 +1271,42 @@ async def _execute_action(
     if log:
         db.refresh(log)
     return action, event, log, probe, route
+
+
+def _deterministic_cruise_action(db: Session, probe: Probe, context: ActionContext) -> tuple[ProposedAction, str]:
+    scripted = scripted_initial_action(probe)
+    if scripted:
+        return scripted, "main_route"
+    current = system_detail(db, probe.current_system_id)
+    target = _main_route_target(context)
+    if current and current.details.get("object_role") == MAIN_BEACON_ROLE and target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Continue outward from the outer terminus toward frontier target {target['name']}."), "main_route"
+    if context.visible_signals and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
+        signal = context.visible_signals[0]
+        return ProposedAction(action="investigate_signal", target_id=signal["id"], reason="Investigate the unprocessed local signal before continuing."), "detour_signal"
+    if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
+        return ProposedAction(action="collect_resource", reason="Collect available resources before continuing cruise."), "resource"
+    if target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Plot main route toward {target['name']}."), "main_route"
+    return ProposedAction(action="wait", reason="Hold attitude and communications; no executable cruise action is available."), "recovery"
+
+
+def _deterministic_cruise_action(db: Session, probe: Probe, context: ActionContext) -> tuple[ProposedAction, str]:
+    scripted = scripted_initial_action(probe)
+    if scripted:
+        return scripted, "main_route"
+    current = system_detail(db, probe.current_system_id)
+    target = _main_route_target(context)
+    if current and current.details.get("object_role") == MAIN_BEACON_ROLE and target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Continue outward from the outer terminus toward frontier target {target['name']}."), "main_route"
+    if context.visible_signals and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
+        signal = context.visible_signals[0]
+        return ProposedAction(action="investigate_signal", target_id=signal["id"], reason="Investigate the unprocessed local signal before continuing."), "detour_signal"
+    if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
+        return ProposedAction(action="collect_resource", reason="Collect available resources before continuing cruise."), "resource"
+    if target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"Plot main route toward {target['name']}."), "main_route"
+    return ProposedAction(action="wait", reason="Hold attitude and communications; no executable cruise action is available."), "recovery"
 
 
 async def run_step(db: Session, llm: LLMClient) -> tuple[SimulationAction, SimulationEvent, ExplorationLog, Probe]:
@@ -1307,27 +1429,30 @@ def _advance_toward_target(db: Session, probe: Probe, target: StarSystem) -> tup
         db.flush()
         return False, route_state["remaining_distance"], route_state
 
-    current = (probe.display_x, probe.display_y, probe.display_z)
+    route_from = route_state["route_from"]
+    origin_tuple = (route_from["x"], route_from["y"], route_from["z"])
     destination = route_state["route_to"]
     destination_tuple = (destination["x"], destination["y"], destination["z"])
-    progress, remaining_before = _route_progress(route_state, current)
+    previous_progress = max(0.0, min(1.0, float(route_state.get("progress", 0.0))))
+    total_distance = max(float(route_state.get("route_distance", 0.0)), 1e-9)
+    remaining_before = total_distance * (1.0 - previous_progress)
     phase, step_distance = _speed_for_route(probe, route_state, remaining_before)
 
     if phase == "arrived" or step_distance >= remaining_before:
-        fraction = 1.0
+        progress = 1.0
     else:
-        fraction = max(0.0, min(1.0, step_distance / max(remaining_before, 1e-9)))
+        progress = max(0.0, min(1.0, previous_progress + step_distance / total_distance))
 
-    probe.display_x = _lerp(probe.display_x, destination_tuple[0], fraction)
-    probe.display_y = _lerp(probe.display_y, destination_tuple[1], fraction)
-    probe.display_z = _lerp(probe.display_z, destination_tuple[2], fraction)
-    probe.x = _lerp(probe.x, target.x, fraction)
-    probe.y = _lerp(probe.y, target.y, fraction)
-    probe.z = _lerp(probe.z, target.z, fraction)
+    probe.display_x = _lerp(origin_tuple[0], destination_tuple[0], progress)
+    probe.display_y = _lerp(origin_tuple[1], destination_tuple[1], progress)
+    probe.display_z = _lerp(origin_tuple[2], destination_tuple[2], progress)
+    probe.x = _lerp(probe.x, target.x, max(0.0, min(1.0, progress - previous_progress)))
+    probe.y = _lerp(probe.y, target.y, max(0.0, min(1.0, progress - previous_progress)))
+    probe.z = _lerp(probe.z, target.z, max(0.0, min(1.0, progress - previous_progress)))
 
     new_point = (probe.display_x, probe.display_y, probe.display_z)
     progress, remaining_after = _route_progress(route_state, new_point)
-    arrived = remaining_after <= ARRIVAL_DISTANCE or fraction >= 1.0
+    arrived = remaining_after <= ARRIVAL_DISTANCE or progress >= 1.0
     if arrived:
         probe.x, probe.y, probe.z = target.x, target.y, target.z
         probe.display_x, probe.display_y, probe.display_z = destination_tuple
@@ -1464,6 +1589,11 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
     summary = "探査機は待機し、姿勢制御と通信同期を維持した。"
     event_type = action.action
     route_state: dict | None = None
+    nav_state = None
+    clock, _ = advance_simulation_clock(db) if probe.mission_time > 0 else (ensure_simulation_clock(db), 0.0)
+    simulation_datetime = clock.simulation_datetime
+    if simulation_datetime.tzinfo is None:
+        simulation_datetime = simulation_datetime.replace(tzinfo=UTC)
     reliability = _sensor_reliability(probe)
 
     if action.action == "move" and action.target_id:
@@ -1471,6 +1601,11 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
         assert target is not None
         previous_target = probe.target_id
         existing_route = _latest_route_state(db, probe) if previous_target == target.id else None
+        nav_state = active_navigation_state(db, probe)
+        if nav_state is None or nav_state.destination_system_id != target.id:
+            nav_state = begin_navigation(db, probe, target, simulation_datetime)
+        else:
+            synchronize_navigation(db, probe, nav_state, target, simulation_datetime)
         if not existing_route:
             route_state = _build_route_state(probe, target)
             probe.target_id = target.id
@@ -1491,6 +1626,23 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
             interpretations.extend(passive_interpretations)
         else:
             arrived, remaining_before_step, route_state = _advance_toward_target(db, probe, target)
+            if nav_state:
+                nav_state.progress = float(route_state["progress"])
+                nav_state.remaining_distance_km = nav_state.total_distance_km * (1.0 - nav_state.progress)
+                nav_state.remaining_distance_pc = nav_state.total_distance_pc * (1.0 - nav_state.progress)
+                nav_state.current_speed_m_s = 0.0 if arrived else min(nav_state.cruise_speed_m_s, nav_state.max_speed_m_s)
+                nav_state.phase = "arrived" if arrived else {
+                    "accelerating": "accelerating",
+                    "cruising": "interstellar_cruise",
+                    "decelerating": "decelerating",
+                    "course_plotted": "system_departure",
+                }.get(route_state["route_phase"], nav_state.phase)
+                nav_state.drive_mode = "conventional" if arrived or nav_state.phase == "system_departure" else "piano_drive"
+                if arrived:
+                    nav_state.arrived_at = simulation_datetime
+                    nav_state.remaining_distance_km = 0.0
+                    nav_state.remaining_distance_pc = 0.0
+                    nav_state.progress = 1.0
             drain_factor = max(0.2, probe.velocity / MAX_CRUISE_SPEED)
             probe.energy = max(0, probe.energy - 0.35 * drain_factor)
             if arrived:
@@ -1562,7 +1714,25 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
         "observations": [item.model_dump() for item in observations],
         "interpretations": [item.model_dump() for item in interpretations],
         **mission_time_payload(probe.mission_time - 1),
+        "simulation_datetime": simulation_datetime.isoformat().replace("+00:00", "Z"),
+        "mission_clock": simulation_datetime.strftime("%Y/%m/%d %H:%M:%S UTC"),
     }
+    if nav_state:
+        nav_payload = navigation_payload(probe, nav_state)
+        event_payload.update(
+            {
+                "navigation_state": nav_payload,
+                "navigation_phase": nav_payload["phase"],
+                "drive_mode": nav_payload["drive_mode"],
+                "current_speed_m_s": nav_payload["current_speed_m_s"],
+                "destination_id": nav_payload["destination_system_id"],
+                "destination_name": nav_payload["destination_name"],
+                "remaining_distance_km": nav_payload["remaining_distance_km"],
+                "remaining_distance_pc": nav_payload["remaining_distance_pc"],
+                "eta_datetime": nav_payload.get("eta_datetime"),
+                "mission_elapsed_seconds": max(0, (simulation_datetime - MISSION_START_AT).total_seconds()),
+            }
+        )
     if route_state:
         event_payload.update(
             {
@@ -1664,7 +1834,7 @@ def _log_decision(
 def _snapshot_with_event_data(probe: Probe, event: SimulationEvent | None = None) -> dict:
     snapshot = {**probe_snapshot(probe), **mission_time_payload(probe.mission_time)}
     if event:
-        for key in ["mission_clock", "sim_timestamp", "sim_elapsed_seconds"]:
+        for key in ["mission_clock", "sim_timestamp", "sim_elapsed_seconds", "simulation_datetime"]:
             if key in event.data:
                 snapshot[key] = event.data[key]
         route_keys = [
@@ -1676,6 +1846,16 @@ def _snapshot_with_event_data(probe: Probe, event: SimulationEvent | None = None
             "speed_setting",
             "remaining_distance",
             "next_target_name",
+            "navigation_state",
+            "navigation_phase",
+            "drive_mode",
+            "current_speed_m_s",
+            "destination_id",
+            "destination_name",
+            "remaining_distance_km",
+            "remaining_distance_pc",
+            "eta_datetime",
+            "mission_elapsed_seconds",
         ]
         for key in route_keys:
             if key in event.data:
@@ -1705,8 +1885,14 @@ async def _persist_log(
                 "navigation_intent": action.raw_payload.get("navigation_intent"),
                 "route_phase": event.data.get("route_phase"),
                 "velocity": probe.velocity,
+                "navigation_phase": event.data.get("navigation_phase"),
+                "current_speed_m_s": event.data.get("current_speed_m_s"),
+                "drive_mode": event.data.get("drive_mode"),
                 "speed_setting": event.data.get("speed_setting", STANDARD_SPEED_SETTING),
                 "remaining_distance": event.data.get("remaining_distance"),
+                "remaining_distance_km": event.data.get("remaining_distance_km"),
+                "remaining_distance_pc": event.data.get("remaining_distance_pc"),
+                "eta_datetime": event.data.get("eta_datetime"),
                 "next_target_name": event.data.get("next_target_name"),
             },
             event={
@@ -1714,10 +1900,17 @@ async def _persist_log(
                 "event_type": event.event_type,
                 "summary": event.summary,
                 **mission_time_payload(event.mission_time),
+                "simulation_datetime": event.data.get("simulation_datetime"),
                 "route_phase": event.data.get("route_phase"),
                 "velocity": probe.velocity,
+                "navigation_phase": event.data.get("navigation_phase"),
+                "current_speed_m_s": event.data.get("current_speed_m_s"),
+                "drive_mode": event.data.get("drive_mode"),
                 "speed_setting": event.data.get("speed_setting", STANDARD_SPEED_SETTING),
                 "remaining_distance": event.data.get("remaining_distance"),
+                "remaining_distance_km": event.data.get("remaining_distance_km"),
+                "remaining_distance_pc": event.data.get("remaining_distance_pc"),
+                "eta_datetime": event.data.get("eta_datetime"),
                 "next_target_name": event.data.get("next_target_name"),
             },
             probe_snapshot=snapshot,

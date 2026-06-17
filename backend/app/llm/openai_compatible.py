@@ -57,7 +57,8 @@ class OpenAICompatibleLLMClient:
         prompts = context.prompt_settings
         data = await self._complete_json(
             "Return only JSON with exactly these keys: title, summary, body_markdown, reliability. "
-            "Use only the mission_clock, sim_timestamp, position, route, observations, and interpretations present in the payload. "
+            "Use only the mission_clock, simulation_datetime, navigation_state, physical distances, speeds, ETA, position, route, observations, and interpretations present in the payload. "
+            "Do not invent distances, speeds, arrival times, or drive modes; those values are calculated by Python. "
             "Never invent dates or use placeholders like 2024, 2026, XX, or ??. "
             "Write like a quiet first-person navigation journal from OVIS, not a dry report. "
             "If route_phase is course_plotted, describe the route decision while the probe remains stopped. "

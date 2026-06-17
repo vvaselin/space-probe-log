@@ -7,16 +7,21 @@ from app.models import (
     Discovery,
     ExplorationLog,
     Probe,
+    ProbeNavigationState,
     ProbeStateHistory,
     PromptSettings,
     ResourceInventory,
     Signal,
+    SimulationClock,
+    SimulationSettings,
     SimulationAction,
     SimulationEvent,
     StarSystem,
     Universe,
 )
 from app.repositories.settings import load_prompt_defaults
+from app.services.clock import reset_simulation_clock
+from app.services.probe_spec import PROBE_ID, PROBE_NAME
 from app.services.snapshots import probe_snapshot
 from app.world.generator import generate_world
 
@@ -29,6 +34,7 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         ExplorationLog,
         SimulationEvent,
         SimulationAction,
+        ProbeNavigationState,
         ProbeStateHistory,
         ResourceInventory,
         Probe,
@@ -37,6 +43,8 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         StarSystem,
         Universe,
         PromptSettings,
+        SimulationClock,
+        SimulationSettings,
     ]:
         db.execute(delete(model))
 
@@ -106,8 +114,8 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
     db.flush()
     earth = db.get(CelestialBody, "earth")
     probe = Probe(
-        id="probe-aurora",
-        name="INSOMNIA-07",
+        id=PROBE_ID,
+        name=PROBE_NAME,
         universe_id=universe.id,
         current_system_id="sol",
         target_id=None,
@@ -132,6 +140,7 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         mission_time=0,
     )
     db.add(probe)
+    reset_simulation_clock(db)
 
     probe_profile, action_policy, log_writer_style = load_prompt_defaults()
     db.add(PromptSettings(id=1, probe_profile=probe_profile, action_policy=action_policy, log_writer_style=log_writer_style))

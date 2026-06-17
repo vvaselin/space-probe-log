@@ -137,6 +137,55 @@ class Probe(Base):
         return _sim_datetime_for_tick(self.mission_time).strftime("%Y/%m/%d %H:%M:%S UTC")
 
 
+class SimulationClock(Base):
+    __tablename__ = "simulation_clocks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    simulation_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: MISSION_START_AT)
+    time_scale: Mapped[float] = mapped_column(Float, default=360.0)
+    clock_state: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    last_real_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SimulationSettings(Base):
+    __tablename__ = "simulation_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    default_time_scale: Mapped[float] = mapped_column(Float, default=360.0)
+    advance_offline: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_offline_elapsed_seconds: Mapped[int] = mapped_column(Integer, default=86_400)
+    time_scale_presets: Mapped[list[float]] = mapped_column(JSON, default=lambda: [0, 360, 1440, 10080, 525600])
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProbeNavigationState(Base):
+    __tablename__ = "probe_navigation_states"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    probe_id: Mapped[str] = mapped_column(ForeignKey("probes.id"), index=True)
+    origin_system_id: Mapped[str] = mapped_column(String(80), index=True)
+    destination_system_id: Mapped[str] = mapped_column(String(80), index=True)
+    destination_name: Mapped[str] = mapped_column(String(160), default="")
+    phase: Mapped[str] = mapped_column(String(40), default="idle", index=True)
+    drive_mode: Mapped[str] = mapped_column(String(40), default="conventional")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    eta_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    arrived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total_distance_pc: Mapped[float] = mapped_column(Float, default=0.0)
+    total_distance_km: Mapped[float] = mapped_column(Float, default=0.0)
+    remaining_distance_pc: Mapped[float] = mapped_column(Float, default=0.0)
+    remaining_distance_km: Mapped[float] = mapped_column(Float, default=0.0)
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    current_speed_m_s: Mapped[float] = mapped_column(Float, default=0.0)
+    cruise_speed_m_s: Mapped[float] = mapped_column(Float, default=23_983_396.64)
+    max_speed_m_s: Mapped[float] = mapped_column(Float, default=35_975_094.96)
+    event_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
+    schedule: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ProbeStateHistory(Base):
     __tablename__ = "probe_state_history"
 

@@ -7,6 +7,9 @@ from app.db.session import get_db
 from app.models import CelestialBody, Signal, SimulationAction
 from app.repositories.read import active_universe, route_points, system_detail, systems
 from app.schemas.domain import MapPayload, SystemDetail, SystemRead
+from app.services.clock import advance_simulation_clock
+from app.services.navigation import latest_navigation_state, navigation_payload, synchronize_navigation
+from app.services.probe_spec import probe_specification
 from app.services.simulation import display_probe_offset, ensure_frontier_targets, ensure_probe
 from app.world.generator import generated_environment_objects, real_data_epoch, stable_seed
 
@@ -51,6 +54,10 @@ def get_system(system_id: str, db: Session = Depends(get_db)):
 @router.get("/map", response_model=MapPayload)
 def get_map(db: Session = Depends(get_db)):
     probe = ensure_probe(db)
+    clock, _ = advance_simulation_clock(db)
+    nav_state = latest_navigation_state(db, probe)
+    nav_target = system_detail(db, nav_state.destination_system_id) if nav_state and nav_state.phase != "arrived" else None
+    synchronize_navigation(db, probe, nav_state, nav_target, clock.simulation_datetime)
     ensure_frontier_targets(db, probe, min_unvisited=6)
     db.commit()
     universe = active_universe(db)
@@ -63,6 +70,7 @@ def get_map(db: Session = Depends(get_db)):
     target = system_detail(db, probe.target_id) if probe.target_id else None
     primary_target = next((item for item in all_systems if item.details.get("object_role") == "far_objective"), None)
     latest_action = db.query(SimulationAction).order_by(SimulationAction.id.desc()).first()
+    nav_payload = navigation_payload(probe, nav_state)
     map_origin = {
         "id": "earth",
         "name": "地球",
@@ -96,6 +104,8 @@ def get_map(db: Session = Depends(get_db)):
                 "x": item.display_x,
                 "y": item.display_y,
                 "z": item.display_z,
+                "display_position": {"x": item.display_x, "y": item.display_y, "z": item.display_z},
+                "galactic_position_pc": {"x": item.x, "y": item.y, "z": item.z},
                 "has_life": item.has_life,
                 "kind": item.kind,
                 "object_role": item.details.get("object_role", "system"),
@@ -114,6 +124,10 @@ def get_map(db: Session = Depends(get_db)):
                 "y": item.display_y,
                 "z": item.display_z,
                 "radius": item.display_radius,
+                "display_position": {"x": item.display_x, "y": item.display_y, "z": item.display_z},
+                "physical_position_km": {"x": item.sim_x, "y": item.sim_y, "z": item.sim_z},
+                "physical_radius_km": item.radius_km,
+                "display_radius": item.display_radius,
                 "object_role": "origin_body" if item.id == "earth" else "body",
                 "source": item.details.get("source", "generated"),
                 "visual_data": item.details.get("visual_data", {}),
@@ -156,10 +170,14 @@ def get_map(db: Session = Depends(get_db)):
             "x": probe.display_x,
             "y": probe.display_y,
             "z": probe.display_z,
+            "display_position": {"x": probe.display_x, "y": probe.display_y, "z": probe.display_z},
+            "galactic_position_pc": {"x": probe.x, "y": probe.y, "z": probe.z},
             "system_id": probe.current_system_id,
             "target_id": probe.target_id,
+            "navigation": nav_payload,
+            "specification": probe_specification().model_dump(mode="json"),
         },
-        "route": route_points(db),
+        "route": route_points(db, probe),
         "route_prediction": prediction,
         "primary_route_prediction": primary_prediction,
         "navigation_intent": latest_action.raw_payload.get("navigation_intent", "main_route") if latest_action else "main_route",

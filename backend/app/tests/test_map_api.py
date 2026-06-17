@@ -15,6 +15,8 @@ def test_map_contains_far_objective_and_distant_stars() -> None:
     assert len(payload["environment_objects"]) >= 3
     assert all(item["source"] == "generated" for item in payload["environment_objects"])
     assert payload["map_origin"]["id"] == "earth"
+    assert payload["probe"]["specification"]["length_m"] == 18
+    assert next(body for body in payload["bodies"] if body["id"] == "earth")["physical_radius_km"] == 6371.0
 
 
 def test_map_includes_route_prediction_while_probe_is_underway(monkeypatch) -> None:

@@ -382,17 +382,35 @@ def fictional_system(world_seed: str, index: int, coordinate: tuple[int, int, in
     )
 
 
-def frontier_system(world_seed: str, ring: int, slot: int, base_radius: float) -> SystemSpec:
-    seed = stable_seed(world_seed, "frontier", ring, slot, round(base_radius, 2))
+def frontier_system(
+    world_seed: str,
+    ring: int,
+    slot: int,
+    base_radius: float,
+    outward_vector: tuple[float, float, float] | None = None,
+) -> SystemSpec:
+    seed = stable_seed(world_seed, "frontier", ring, slot, round(base_radius, 2), *(round(v, 3) for v in outward_vector or (0.0, 0.0, 0.0)))
     rng = random.Random(seed)
     names = ["Noctua", "Lumen", "Vesper", "Astra", "Umbra", "Orison", "Caelum", "Morrow"]
     name = f"{rng.choice(names)}-{ring}{slot}{rng.randint(10, 99)}"
     radius = base_radius + ring * 2.8 + rng.uniform(0.5, 3.0)
-    theta = (slot / 4) * math.tau + rng.uniform(-0.46, 0.46)
-    phi = rng.uniform(-0.58, 0.58)
-    x = math.cos(phi) * math.cos(theta) * radius
-    y = math.sin(phi) * radius
-    z = math.cos(phi) * math.sin(theta) * radius
+    if outward_vector:
+        forward = _normalize_vector(outward_vector)
+        guide = (0.0, 1.0, 0.0) if abs(forward[1]) < 0.92 else (1.0, 0.0, 0.0)
+        right = _normalize_vector(_cross(guide, forward))
+        up = _normalize_vector(_cross(forward, right))
+        theta = (slot / 4) * math.tau + rng.uniform(-0.28, 0.28)
+        lateral = math.cos(theta) * rng.uniform(0.4, 1.8)
+        vertical = math.sin(theta) * rng.uniform(0.4, 1.8)
+        x = forward[0] * radius + right[0] * lateral + up[0] * vertical
+        y = forward[1] * radius + right[1] * lateral + up[1] * vertical
+        z = forward[2] * radius + right[2] * lateral + up[2] * vertical
+    else:
+        theta = (slot / 4) * math.tau + rng.uniform(-0.46, 0.46)
+        phi = rng.uniform(-0.58, 0.58)
+        x = math.cos(phi) * math.cos(theta) * radius
+        y = math.sin(phi) * radius
+        z = math.cos(phi) * math.sin(theta) * radius
     display = (x * 18, y * 18, z * 18)
     star_mass = round(rng.uniform(0.35, 1.8), 2)
     planet_count = rng.randint(2, 6)
@@ -479,8 +497,14 @@ def frontier_system(world_seed: str, ring: int, slot: int, base_radius: float) -
     )
 
 
-def frontier_shell_systems(world_seed: str, ring: int, base_radius: float, count: int = 4) -> list[SystemSpec]:
-    return [frontier_system(world_seed, ring, slot + 1, base_radius) for slot in range(count)]
+def frontier_shell_systems(
+    world_seed: str,
+    ring: int,
+    base_radius: float,
+    count: int = 4,
+    outward_vector: tuple[float, float, float] | None = None,
+) -> list[SystemSpec]:
+    return [frontier_system(world_seed, ring, slot + 1, base_radius, outward_vector) for slot in range(count)]
 
 
 def real_exoplanet_systems(limit_hosts: int = 48) -> list[SystemSpec]:

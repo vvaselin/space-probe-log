@@ -1,9 +1,31 @@
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 ActionName = Literal["move", "observe", "investigate_signal", "collect_resource", "wait"]
+
+
+class DriveMode(StrEnum):
+    conventional = "conventional"
+    piano_drive = "piano_drive"
+
+
+class NavigationPhase(StrEnum):
+    idle = "idle"
+    local_navigation = "local_navigation"
+    system_departure = "system_departure"
+    accelerating = "accelerating"
+    interstellar_cruise = "interstellar_cruise"
+    decelerating = "decelerating"
+    system_arrival = "system_arrival"
+    arrived = "arrived"
+
+
+class ClockState(StrEnum):
+    running = "running"
+    paused = "paused"
 
 
 class Vector3(BaseModel):
@@ -77,6 +99,87 @@ class PromptSettingsUpdate(BaseModel):
     log_writer_style: str = Field(default="", max_length=4000)
 
 
+class ProbeSpecification(BaseModel):
+    id: str
+    display_name: str
+    vessel_type: str
+    length_m: float
+    width_m: float
+    height_m: float
+    deployed_max_width_m: float
+    launch_mass_kg: float
+    dry_mass_kg: float
+    propellant_mass_kg: float
+    repair_resource_feedstock_kg: float
+    cruise_speed_fraction_c: float
+    cruise_speed_m_s: float
+    cruise_speed_km_s: float
+    max_cruise_speed_fraction_c: float
+    max_cruise_speed_m_s: float
+    max_cruise_speed_km_s: float
+    planned_operational_years: int
+    local_drive_mode: DriveMode
+    interstellar_drive_mode: DriveMode
+    defense: str
+    capabilities: list[str]
+
+
+class SimulationClockRead(BaseModel):
+    simulation_datetime: datetime
+    mission_clock: str
+    time_scale: float
+    clock_state: ClockState
+    last_real_datetime: datetime
+    real_elapsed_seconds_applied: float = 0.0
+
+
+class SimulationClockUpdate(BaseModel):
+    time_scale: float | None = Field(default=None, ge=0)
+    clock_state: ClockState | None = None
+
+
+class SimulationSettingsRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    default_time_scale: float
+    advance_offline: bool
+    max_offline_elapsed_seconds: int
+    time_scale_presets: list[float]
+    updated_at: datetime
+
+
+class SimulationSettingsUpdate(BaseModel):
+    default_time_scale: float | None = Field(default=None, ge=0)
+    advance_offline: bool | None = None
+    max_offline_elapsed_seconds: int | None = Field(default=None, ge=0)
+    time_scale_presets: list[float] | None = None
+
+
+class ProbeNavigationRead(BaseModel):
+    active: bool = False
+    phase: NavigationPhase = NavigationPhase.idle
+    drive_mode: DriveMode = DriveMode.conventional
+    origin_system_id: str | None = None
+    destination_system_id: str | None = None
+    destination_name: str | None = None
+    started_at: datetime | None = None
+    eta_datetime: datetime | None = None
+    arrived_at: datetime | None = None
+    total_distance_pc: float = 0.0
+    total_distance_km: float = 0.0
+    remaining_distance_pc: float = 0.0
+    remaining_distance_km: float = 0.0
+    progress: float = 0.0
+    progress_percent: float = 0.0
+    current_speed_m_s: float = 0.0
+    current_speed_km_s: float = 0.0
+    cruise_speed_m_s: float = 0.0
+    max_speed_m_s: float = 0.0
+    galactic_position_pc: Vector3 | None = None
+    local_position_au: Vector3 | None = None
+    display_position: Vector3 | None = None
+
+
 class ProbeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -107,6 +210,9 @@ class ProbeRead(BaseModel):
     mission_clock: str
     sim_timestamp: str
     sim_elapsed_seconds: int
+    specification: ProbeSpecification | None = None
+    navigation: ProbeNavigationRead | None = None
+    simulation_datetime: datetime | None = None
 
 
 class BodyRead(BaseModel):

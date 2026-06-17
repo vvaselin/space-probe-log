@@ -26,6 +26,9 @@ export interface Probe {
   mission_clock: string
   sim_timestamp: string
   sim_elapsed_seconds: number
+  specification?: ProbeSpecification | null
+  navigation?: ProbeNavigation | null
+  simulation_datetime?: string | null
 }
 
 export interface LogListItem {
@@ -111,6 +114,8 @@ export interface MapPayload {
     y: number
     z: number
     radius: number
+    physical_radius_km?: number
+    display_radius?: number
     object_role?: string
     source?: 'jpl_horizons' | 'nasa_exoplanet_archive' | 'generated' | 'manual' | string
     visual_data?: {
@@ -152,7 +157,7 @@ export interface MapPayload {
     }
     details?: Record<string, unknown>
   }>
-  probe: { id: string; name: string; x: number; y: number; z: number; system_id: string; target_id?: string | null }
+  probe: { id: string; name: string; x: number; y: number; z: number; system_id: string; target_id?: string | null; navigation?: ProbeNavigation; specification?: ProbeSpecification }
   route: Array<{ x: number; y: number; z: number }>
   route_prediction?: { target_id: string; target_name: string; from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number } } | null
   primary_route_prediction?: { target_id: string; target_name: string; from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number } } | null
@@ -183,13 +188,96 @@ export interface SimulationTick {
     target_name: string
     phase: 'course_plotted' | 'accelerating' | 'cruising' | 'decelerating' | 'arrived' | string
     velocity: number
+    current_speed_m_s?: number
     speed_setting: string
+    drive_mode?: string
     progress: number
     remaining_distance: number
+    remaining_distance_km?: number
+    remaining_distance_pc?: number
+    eta_datetime?: string
   } | null
   mission_clock: string
   sim_timestamp: string
   sim_elapsed_seconds: number
+}
+
+export type DriveMode = 'conventional' | 'piano_drive'
+export type NavigationPhase = 'idle' | 'local_navigation' | 'system_departure' | 'accelerating' | 'interstellar_cruise' | 'decelerating' | 'system_arrival' | 'arrived'
+export type ClockState = 'running' | 'paused'
+
+export interface ProbeSpecification {
+  id: string
+  display_name: string
+  vessel_type: string
+  length_m: number
+  width_m: number
+  height_m: number
+  deployed_max_width_m: number
+  launch_mass_kg: number
+  dry_mass_kg: number
+  propellant_mass_kg: number
+  repair_resource_feedstock_kg: number
+  cruise_speed_fraction_c: number
+  cruise_speed_m_s: number
+  cruise_speed_km_s: number
+  max_cruise_speed_fraction_c: number
+  max_cruise_speed_m_s: number
+  max_cruise_speed_km_s: number
+  planned_operational_years: number
+  local_drive_mode: DriveMode
+  interstellar_drive_mode: DriveMode
+  defense: string
+  capabilities: string[]
+}
+
+export interface ProbeNavigation {
+  active: boolean
+  phase: NavigationPhase | string
+  drive_mode: DriveMode | string
+  origin_system_id?: string | null
+  destination_system_id?: string | null
+  destination_name?: string | null
+  started_at?: string | null
+  eta_datetime?: string | null
+  arrived_at?: string | null
+  total_distance_pc: number
+  total_distance_km: number
+  remaining_distance_pc: number
+  remaining_distance_km: number
+  progress: number
+  progress_percent: number
+  current_speed_m_s: number
+  current_speed_km_s: number
+  cruise_speed_m_s: number
+  max_speed_m_s: number
+  galactic_position_pc?: { x: number; y: number; z: number } | null
+  local_position_au?: { x: number; y: number; z: number } | null
+  display_position?: { x: number; y: number; z: number } | null
+}
+
+export interface SimulationClock {
+  simulation_datetime: string
+  mission_clock: string
+  time_scale: number
+  clock_state: ClockState
+  last_real_datetime: string
+  real_elapsed_seconds_applied: number
+}
+
+export interface SimulationSettings {
+  default_time_scale: number
+  advance_offline: boolean
+  max_offline_elapsed_seconds: number
+  time_scale_presets: number[]
+  updated_at: string
+}
+
+export interface SimulationSettingsUpdate {
+  default_time_scale?: number
+  advance_offline?: boolean
+  max_offline_elapsed_seconds?: number
+  time_scale_presets?: number[]
 }
 
 export interface PromptSettings {

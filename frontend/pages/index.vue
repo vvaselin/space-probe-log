@@ -11,10 +11,21 @@ onMounted(() => store.loadAll())
 onBeforeUnmount(() => store.stopCruise())
 
 const mapKey = computed(() => {
-  return store.map ? 'mission-map' : 'map-loading'
+  const map = store.map
+  if (!map) return 'map-loading'
+  const focus = map.focus ? `${map.focus.x.toFixed(2)}:${map.focus.y.toFixed(2)}:${map.focus.z.toFixed(2)}` : 'no-focus'
+  return [
+    'mission-map',
+    store.sceneRevision,
+    map.probe.id,
+    map.probe.system_id,
+    map.probe.target_id ?? 'idle',
+    map.systems.length,
+    focus,
+  ].join(':')
 })
 
-const route = computed(() => store.lastTick?.route ?? null)
+const route = computed(() => store.navigation ?? store.probe?.navigation ?? null)
 const missionClock = computed(() => store.probe?.mission_clock ?? '2080/05/02 12:00:00 UTC')
 const selectedLogBody = computed(() => renderMarkdown(selectedLog.value?.body_markdown ?? ''))
 
@@ -127,12 +138,13 @@ function renderMarkdown(markdown: string) {
       <p class="hud-mission">{{ store.probe.current_mission }}</p>
 
       <div class="hud-route">
-        <span>{{ route?.target_name ?? '航路未設定' }}</span>
+        <span>{{ route?.destination_name ?? '航路未設定' }}</span>
         <strong>{{ phaseLabel }}</strong>
-        <small>速度 {{ (route?.velocity ?? store.probe.velocity).toFixed(2) }} 表示単位/tick / {{ route?.speed_setting ?? '標準巡航' }}</small>
-        <small>残距離 {{ (route?.remaining_distance ?? 0).toFixed(1) }} / 進捗 {{ Math.round((route?.progress ?? 0) * 100) }}%</small>
+        <small>速度 {{ (route?.current_speed_km_s ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 }) }} km/s / {{ route?.drive_mode ?? 'conventional' }}</small>
+        <small>残距離 {{ (route?.remaining_distance_pc ?? 0).toFixed(4) }} pc / 進捗 {{ Math.round(route?.progress_percent ?? 0) }}%</small>
+        <small v-if="route?.eta_datetime">ETA {{ new Date(route.eta_datetime).toISOString().replace('T', ' ').slice(0, 16) }} UTC</small>
         <div class="hud-route-bar">
-          <span :style="{ width: `${Math.round((route?.progress ?? 0) * 100)}%` }" />
+          <span :style="{ width: `${Math.round(route?.progress_percent ?? 0)}%` }" />
         </div>
       </div>
       <p v-if="store.lastEvent" class="hud-last-event">{{ store.lastEvent.summary }}</p>

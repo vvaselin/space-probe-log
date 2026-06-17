@@ -16,6 +16,15 @@ const localFollowEnabled = ref(false)
 const host = ref<HTMLDivElement | null>(null)
 let cleanup: (() => void) | null = null
 let setProbeFollow: ((enabled: boolean) => void) | null = null
+type SpaceMapCameraView = {
+  compact: boolean
+  offset: { x: number; y: number; z: number }
+  targetDeltaFromProbe: { x: number; y: number; z: number }
+}
+
+function cameraViewStore() {
+  return globalThis as typeof globalThis & { __spaceMapCameraView?: SpaceMapCameraView }
+}
 
 type Selectable = THREE.Object3D & { userData: { label: string } }
 type LodEntry = {
@@ -31,6 +40,22 @@ function vectorFrom(point: { x: number; y: number; z: number }) {
   return new THREE.Vector3(point.x, point.y, point.z)
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function bodyVisualRadius(body: MapPayload['bodies'][number]) {
+  const radiusKm = body.physical_radius_km
+  if (!radiusKm || radiusKm <= 0) return Math.max(0.24, body.radius * 1.05)
+  const earthRadiusKm = 6371
+  return clamp(Math.sqrt(radiusKm / earthRadiusKm) * 0.24, 0.08, body.type === 'star' ? 2.55 : 1.05)
+}
+
+function probeVisualLength(payload: MapPayload) {
+  const lengthKm = (payload.probe.specification?.length_m ?? 18) / 1000
+  return clamp(Math.sqrt(lengthKm / 6371) * 0.24, 0.08, 0.18)
+}
+
 onMounted(() => {
   if (!host.value) return
   const width = host.value.clientWidth
@@ -40,6 +65,7 @@ onMounted(() => {
   scene.fog = new THREE.FogExp2(0x030812, 0.0022)
 
   const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 3000)
+  const initialProbeAnchor = vectorFrom(props.payload.probe)
   const solarOverview = props.payload.probe.system_id === 'sol' && !props.payload.probe.target_id
   const focus = solarOverview
     ? new THREE.Vector3(0, 0, 0)
@@ -49,9 +75,9 @@ onMounted(() => {
   camera.position.copy(
     focus.clone().add(
       new THREE.Vector3(
-        props.compact ? 26 : solarOverview ? 64 : 52,
-        props.compact ? 18 : solarOverview ? 42 : 34,
-        props.compact ? 34 : solarOverview ? 92 : 66,
+        props.compact ? 13 : solarOverview ? 34 : 26,
+        props.compact ? 9 : solarOverview ? 24 : 18,
+        props.compact ? 18 : solarOverview ? 48 : 34,
       ),
     ),
   )
@@ -74,9 +100,20 @@ onMounted(() => {
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.08
-  controls.minDistance = 4
+  controls.minDistance = 1.4
   controls.maxDistance = 1100
   controls.target.copy(focus)
+  const savedCameraView = cameraViewStore().__spaceMapCameraView
+  if (savedCameraView && savedCameraView.compact === Boolean(props.compact)) {
+    const targetDelta = new THREE.Vector3(
+      savedCameraView.targetDeltaFromProbe.x,
+      savedCameraView.targetDeltaFromProbe.y,
+      savedCameraView.targetDeltaFromProbe.z,
+    )
+    const offset = new THREE.Vector3(savedCameraView.offset.x, savedCameraView.offset.y, savedCameraView.offset.z)
+    controls.target.copy(initialProbeAnchor.clone().add(targetDelta))
+    camera.position.copy(controls.target.clone().add(offset))
+  }
 
   const selectable: Selectable[] = []
   const lodEntries: LodEntry[] = []
@@ -327,10 +364,8 @@ onMounted(() => {
     if (body.type === 'star') {
       bodyMaterial.emissiveIntensity = body.visual_data?.emission_strength ?? 1.25
     }
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(Math.max(0.24, body.radius * 1.05), 24, 16),
-      bodyMaterial
-    )
+    const visualRadius = bodyVisualRadius(body)
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(visualRadius, 24, 16), bodyMaterial)
     mesh.position.set(body.x, body.y, body.z)
     mesh.userData.label = `${body.name} / ${body.type}`
     scene.add(mesh)
@@ -348,8 +383,8 @@ onMounted(() => {
       })
       const ring = new THREE.Mesh(
         new THREE.RingGeometry(
-          (ringVisual.inner_radius ?? 1.5) * body.radius,
-          (ringVisual.outer_radius ?? 2.3) * body.radius,
+          (ringVisual.inner_radius ?? 1.5) * visualRadius,
+          (ringVisual.outer_radius ?? 2.3) * visualRadius,
           72,
         ),
         ringMaterial,
@@ -366,12 +401,12 @@ onMounted(() => {
   }
 
   for (const signal of props.payload.signals) {
-    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(signal.investigated ? 0.34 : 0.52), signalMaterial)
+    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(signal.investigated ? 0.16 : 0.24), signalMaterial)
     mesh.position.set(signal.x, signal.y, signal.z)
     mesh.userData.label = `${signal.id} / ${signal.kind}`
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
-    const point = createLodPoint(mesh.position, 0xffdbe6, signal.investigated ? 1.4 : 1.9)
+    const point = createLodPoint(mesh.position, 0xffdbe6, signal.investigated ? 1.1 : 1.4)
     point.userData.label = mesh.userData.label
     selectable.push(point as unknown as Selectable)
     lodEntries.push({ mesh, point, near: 90, far: 260 })
@@ -412,9 +447,10 @@ onMounted(() => {
     selectable.push(mesh as unknown as Selectable)
   }
 
-  const probe = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4), probeMaterial)
-  const probeVisualOffset = new THREE.Vector3(0.45, 0.95, 0.35)
-  let probeTargetAnchor = vectorFrom(props.payload.probe)
+  const probeLength = probeVisualLength(props.payload)
+  const probe = new THREE.Mesh(new THREE.ConeGeometry(probeLength * 0.34, probeLength, 4), probeMaterial)
+  const probeVisualOffset = new THREE.Vector3(probeLength * 1.4, probeLength * 2.3, probeLength * 1.1)
+  let probeTargetAnchor = initialProbeAnchor.clone()
   const probeCurrentAnchor = probeTargetAnchor.clone()
   probe.position.copy(probeCurrentAnchor.clone().add(probeVisualOffset))
   probe.userData.label = props.payload.probe.name
@@ -422,7 +458,7 @@ onMounted(() => {
   selectable.push(probe as unknown as Selectable)
 
   const probeMarker = new THREE.Mesh(
-    new THREE.RingGeometry(1.05, 1.16, 40),
+    new THREE.RingGeometry(0.52, 0.58, 40),
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.86, side: THREE.DoubleSide })
   )
   probeMarker.position.copy(probeCurrentAnchor)
@@ -431,6 +467,9 @@ onMounted(() => {
 
   const origin = props.payload.map_origin
   let originLine: THREE.Line | null = null
+  let routeLine: THREE.Line | null = null
+  let predictionLine: THREE.Line | null = null
+  let primaryPredictionLine: THREE.Line | null = null
   if (origin) {
     const originPoint = vectorFrom(origin)
     originLine = new THREE.Line(
@@ -440,29 +479,65 @@ onMounted(() => {
     scene.add(originLine)
   }
 
-  if (props.payload.route.length >= 2) {
+  const disposeObjectMaterial = (object: THREE.Object3D) => {
+    const material = (object as THREE.Line).material
+    if (Array.isArray(material)) material.forEach((item) => item.dispose())
+    else material.dispose()
+  }
+  const removeLine = (line: THREE.Line | null) => {
+    if (!line) return null
+    scene.remove(line)
+    line.geometry.dispose()
+    disposeObjectMaterial(line)
+    return null
+  }
+  const routeGeometry = () => {
     const points = props.payload.route.map((point) => new THREE.Vector3(point.x, point.y, point.z))
+    if (points.length >= 2) points[points.length - 1] = probeCurrentAnchor.clone()
     const routePoints = points.length >= 4 ? new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.35).getPoints(points.length * 10) : points
-    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(routePoints), new THREE.LineBasicMaterial({ color: 0x9fffe6, transparent: true, opacity: 0.9 })))
+    return new THREE.BufferGeometry().setFromPoints(routePoints)
   }
-
-  if (props.payload.route_prediction) {
-    const prediction = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([vectorFrom(props.payload.route_prediction.from), vectorFrom(props.payload.route_prediction.to)]),
-      new THREE.LineDashedMaterial({ color: 0xdbeafe, transparent: true, opacity: 0.42, dashSize: 2.2, gapSize: 1.5 })
-    )
-    prediction.computeLineDistances()
-    scene.add(prediction)
+  const syncRouteLine = () => {
+    if (props.payload.route.length < 2) {
+      routeLine = removeLine(routeLine)
+      return
+    }
+    const geometry = routeGeometry()
+    if (!routeLine) {
+      routeLine = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x9fffe6, transparent: true, opacity: 0.9 }))
+      scene.add(routeLine)
+      return
+    }
+    routeLine.geometry.dispose()
+    routeLine.geometry = geometry
   }
-
-  if (props.payload.primary_route_prediction) {
-    const primary = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([vectorFrom(props.payload.primary_route_prediction.from), vectorFrom(props.payload.primary_route_prediction.to)]),
-      new THREE.LineDashedMaterial({ color: 0xf8fbff, transparent: true, opacity: 0.22, dashSize: 7.0, gapSize: 4.0 })
-    )
-    primary.computeLineDistances()
-    scene.add(primary)
+  const syncPredictionLine = (
+    current: THREE.Line | null,
+    prediction: MapPayload['route_prediction'],
+    options: { color: number; opacity: number; dashSize: number; gapSize: number },
+  ) => {
+    if (!prediction) return removeLine(current)
+    const geometry = new THREE.BufferGeometry().setFromPoints([probeCurrentAnchor.clone(), vectorFrom(prediction.to)])
+    if (!current) {
+      const line = new THREE.Line(
+        geometry,
+        new THREE.LineDashedMaterial({ color: options.color, transparent: true, opacity: options.opacity, dashSize: options.dashSize, gapSize: options.gapSize })
+      )
+      line.computeLineDistances()
+      scene.add(line)
+      return line
+    }
+    current.geometry.dispose()
+    current.geometry = geometry
+    current.computeLineDistances()
+    return current
   }
+  const syncPredictionLines = () => {
+    predictionLine = syncPredictionLine(predictionLine, props.payload.route_prediction, { color: 0xdbeafe, opacity: 0.42, dashSize: 2.2, gapSize: 1.5 })
+    primaryPredictionLine = syncPredictionLine(primaryPredictionLine, props.payload.primary_route_prediction, { color: 0xf8fbff, opacity: 0.22, dashSize: 7.0, gapSize: 4.0 })
+  }
+  syncRouteLine()
+  syncPredictionLines()
 
   const raycaster = new THREE.Raycaster()
   raycaster.params.Points = { threshold: 4 }
@@ -493,8 +568,33 @@ onMounted(() => {
       props.payload.probe.target_id,
     ] as const,
     () => {
-      probeTargetAnchor = vectorFrom(props.payload.probe)
+      retargetProbe()
     },
+    { flush: 'sync' },
+  )
+  const stopRouteWatch = watch(
+    () => props.payload.route.map((point) => `${point.x}:${point.y}:${point.z}`).join('|'),
+    syncRouteLine,
+    { flush: 'sync' },
+  )
+  const stopPredictionWatch = watch(
+    () => [
+      props.payload.route_prediction?.target_id ?? '',
+      props.payload.route_prediction?.from.x ?? 0,
+      props.payload.route_prediction?.from.y ?? 0,
+      props.payload.route_prediction?.from.z ?? 0,
+      props.payload.route_prediction?.to.x ?? 0,
+      props.payload.route_prediction?.to.y ?? 0,
+      props.payload.route_prediction?.to.z ?? 0,
+      props.payload.primary_route_prediction?.target_id ?? '',
+      props.payload.primary_route_prediction?.from.x ?? 0,
+      props.payload.primary_route_prediction?.from.y ?? 0,
+      props.payload.primary_route_prediction?.from.z ?? 0,
+      props.payload.primary_route_prediction?.to.x ?? 0,
+      props.payload.primary_route_prediction?.to.y ?? 0,
+      props.payload.primary_route_prediction?.to.z ?? 0,
+    ].join(':'),
+    syncPredictionLines,
     { flush: 'sync' },
   )
 
@@ -524,7 +624,13 @@ onMounted(() => {
 
   let frame = 0
   let lastFrameAt = performance.now()
-  const visualProbeSpeed = 2.35
+  let visualProbeSpeed = 2.8
+  const retargetProbe = () => {
+    const nextAnchor = vectorFrom(props.payload.probe)
+    const distance = probeCurrentAnchor.distanceTo(nextAnchor)
+    probeTargetAnchor = nextAnchor
+    visualProbeSpeed = clamp(distance / 1.35, 2.8, 18)
+  }
   const animate = () => {
     frame = requestAnimationFrame(animate)
     const now = performance.now()
@@ -542,6 +648,8 @@ onMounted(() => {
     probeMarker.position.copy(probeCurrentAnchor)
     probe.rotation.y += 0.014
     probeMarker.rotation.z += 0.01
+    if (routeLine) syncRouteLine()
+    if (predictionLine || primaryPredictionLine) syncPredictionLines()
     if (originLine) {
       const positions = originLine.geometry.getAttribute('position') as THREE.BufferAttribute
       positions.setXYZ(1, probeCurrentAnchor.x, probeCurrentAnchor.y, probeCurrentAnchor.z)
@@ -585,8 +693,15 @@ onMounted(() => {
   animate()
 
   cleanup = () => {
+    cameraViewStore().__spaceMapCameraView = {
+      compact: Boolean(props.compact),
+      offset: camera.position.clone().sub(controls.target),
+      targetDeltaFromProbe: controls.target.clone().sub(probeCurrentAnchor),
+    }
     cancelAnimationFrame(frame)
     stopProbeWatch()
+    stopRouteWatch()
+    stopPredictionWatch()
     renderer.domElement.removeEventListener('click', click)
     window.removeEventListener('resize', resize)
     renderer.dispose()
@@ -597,6 +712,9 @@ onMounted(() => {
       if (Array.isArray(material)) material.forEach((item) => item.dispose())
       else material.dispose()
     }
+    removeLine(routeLine)
+    removeLine(predictionLine)
+    removeLine(primaryPredictionLine)
     host.value?.replaceChildren()
     setProbeFollow = null
   }
