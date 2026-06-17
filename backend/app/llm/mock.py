@@ -24,8 +24,7 @@ class MockLLMClient:
     async def generate_log(self, context: LogContext) -> GeneratedLog:
         event = context.event
         snapshot = context.probe_snapshot
-        mission_time = int(snapshot["mission_time"])
-        log_number = int(snapshot.get("log_number", mission_time))
+        log_number = int(snapshot.get("log_number", snapshot["mission_time"]))
         observations = context.observations
         passive = [obs for obs in observations if obs.type.startswith("passive")]
         title = _title(context)
@@ -47,7 +46,7 @@ class MockLLMClient:
         )
         reliability = min([obs.reliability for obs in observations], default=0.9)
         return GeneratedLog(
-            title=f"INSOMNIA-07 {title} / T+{mission_time}",
+            title=f"INSOMNIA-07 {title}",
             summary=f"{event['summary']} OVISは航行ログとして保存した。",
             body_markdown=body,
             reliability=reliability,

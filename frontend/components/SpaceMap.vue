@@ -2,6 +2,8 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { pickTextureSet } from '~/assets/texture/registry'
+import { useProbeFollowCamera } from '~/composables/useProbeFollowCamera'
+import { useProbeMotion } from '~/composables/useProbeMotion'
 import type { MapPayload } from '~/types/api'
 
 const props = defineProps<{
@@ -450,8 +452,8 @@ onMounted(() => {
   const probeLength = probeVisualLength(props.payload)
   const probe = new THREE.Mesh(new THREE.ConeGeometry(probeLength * 0.34, probeLength, 4), probeMaterial)
   const probeVisualOffset = new THREE.Vector3(probeLength * 1.4, probeLength * 2.3, probeLength * 1.1)
-  let probeTargetAnchor = initialProbeAnchor.clone()
-  const probeCurrentAnchor = probeTargetAnchor.clone()
+  const probeMotion = useProbeMotion(props.payload)
+  const probeCurrentAnchor = probeMotion.renderedPosition
   probe.position.copy(probeCurrentAnchor.clone().add(probeVisualOffset))
   probe.userData.label = props.payload.probe.name
   scene.add(probe)
@@ -468,6 +470,7 @@ onMounted(() => {
   const origin = props.payload.map_origin
   let originLine: THREE.Line | null = null
   let routeLine: THREE.Line | null = null
+  let dynamicRouteLine: THREE.Line | null = null
   let predictionLine: THREE.Line | null = null
   let primaryPredictionLine: THREE.Line | null = null
   if (origin) {
@@ -492,24 +495,45 @@ onMounted(() => {
     return null
   }
   const routeGeometry = () => {
-    const points = props.payload.route.map((point) => new THREE.Vector3(point.x, point.y, point.z))
-    if (points.length >= 2) points[points.length - 1] = probeCurrentAnchor.clone()
+    const points = props.payload.route.slice(0, -1).map((point) => new THREE.Vector3(point.x, point.y, point.z))
     const routePoints = points.length >= 4 ? new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.35).getPoints(points.length * 10) : points
     return new THREE.BufferGeometry().setFromPoints(routePoints)
   }
+  const lastConfirmedRoutePoint = () => {
+    const fixedRoute = props.payload.route.slice(0, -1)
+    const point = fixedRoute.at(-1) ?? props.payload.route[0]
+    return point ? new THREE.Vector3(point.x, point.y, point.z) : probeCurrentAnchor.clone()
+  }
   const syncRouteLine = () => {
-    if (props.payload.route.length < 2) {
+    if (props.payload.route.length < 3) {
       routeLine = removeLine(routeLine)
+    } else {
+      const geometry = routeGeometry()
+      if (!routeLine) {
+        routeLine = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x9fffe6, transparent: true, opacity: 0.72 }))
+        scene.add(routeLine)
+      } else {
+        routeLine.geometry.dispose()
+        routeLine.geometry = geometry
+      }
+    }
+    const dynamicGeometry = new THREE.BufferGeometry().setFromPoints([lastConfirmedRoutePoint(), probeCurrentAnchor.clone()])
+    if (!dynamicRouteLine) {
+      dynamicRouteLine = new THREE.Line(dynamicGeometry, new THREE.LineBasicMaterial({ color: 0x9fffe6, transparent: true, opacity: 0.96 }))
+      scene.add(dynamicRouteLine)
       return
     }
-    const geometry = routeGeometry()
-    if (!routeLine) {
-      routeLine = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x9fffe6, transparent: true, opacity: 0.9 }))
-      scene.add(routeLine)
-      return
-    }
-    routeLine.geometry.dispose()
-    routeLine.geometry = geometry
+    dynamicRouteLine.geometry.dispose()
+    dynamicRouteLine.geometry = dynamicGeometry
+  }
+  const updateDynamicRouteLine = () => {
+    if (!dynamicRouteLine) return
+    const positions = dynamicRouteLine.geometry.getAttribute('position') as THREE.BufferAttribute
+    const start = lastConfirmedRoutePoint()
+    positions.setXYZ(0, start.x, start.y, start.z)
+    positions.setXYZ(1, probeCurrentAnchor.x, probeCurrentAnchor.y, probeCurrentAnchor.z)
+    positions.needsUpdate = true
+    dynamicRouteLine.geometry.computeBoundingSphere()
   }
   const syncPredictionLine = (
     current: THREE.Line | null,
@@ -562,10 +586,15 @@ onMounted(() => {
 
   const stopProbeWatch = watch(
     () => [
-      props.payload.probe.x,
-      props.payload.probe.y,
-      props.payload.probe.z,
+      props.payload.probe.navigation?.display_position?.x ?? props.payload.probe.x,
+      props.payload.probe.navigation?.display_position?.y ?? props.payload.probe.y,
+      props.payload.probe.navigation?.display_position?.z ?? props.payload.probe.z,
+      props.payload.probe.navigation?.sampled_at ?? '',
+      props.payload.probe.navigation?.phase ?? '',
+      props.payload.probe.navigation?.progress ?? 0,
       props.payload.probe.target_id,
+      props.payload.clock?.time_scale ?? 1,
+      props.payload.clock?.clock_state ?? 'running',
     ] as const,
     () => {
       retargetProbe()
@@ -598,57 +627,43 @@ onMounted(() => {
     { flush: 'sync' },
   )
 
-  let followLocked = false
   localFollowEnabled.value = false
-  let lastFollowAnchor = probeCurrentAnchor.clone()
-  let cameraTween: { start: THREE.Vector3; end: THREE.Vector3; targetStart: THREE.Vector3; targetEnd: THREE.Vector3; t: number } | null = null
+  const followCamera = useProbeFollowCamera(camera, controls, probeCurrentAnchor)
   setProbeFollow = (enabled: boolean) => {
-    if (followLocked === enabled) return
-    followLocked = enabled
+    if (followCamera.isEnabled() === enabled) return
     localFollowEnabled.value = enabled
-    cameraTween = null
-    lastFollowAnchor.copy(probeCurrentAnchor)
-    if (!enabled) return
-    selected.value = props.payload.probe.name
-    const targetEnd = probeCurrentAnchor.clone()
-    const targetShift = targetEnd.clone().sub(controls.target)
-    cameraTween = {
-      start: camera.position.clone(),
-      end: camera.position.clone().add(targetShift),
-      targetStart: controls.target.clone(),
-      targetEnd,
-      t: 0,
-    }
+    if (enabled) selected.value = props.payload.probe.name
+    followCamera.setEnabled(enabled, probeCurrentAnchor)
   }
   if (props.followEnabled) setProbeFollow(true)
 
   let frame = 0
   let lastFrameAt = performance.now()
-  let visualProbeSpeed = 2.8
+  const effectiveTimeScale = () => (props.payload.clock?.clock_state === 'paused' ? 0 : props.payload.clock?.time_scale ?? 1)
   const retargetProbe = () => {
-    const nextAnchor = vectorFrom(props.payload.probe)
-    const distance = probeCurrentAnchor.distanceTo(nextAnchor)
-    probeTargetAnchor = nextAnchor
-    visualProbeSpeed = clamp(distance / 1.35, 2.8, 18)
+    probeMotion.updateSnapshot(props.payload)
   }
+  const stopClockWatch = watch(
+    () => [props.payload.clock?.time_scale ?? 1, props.payload.clock?.clock_state ?? 'running'] as const,
+    () => {
+      probeMotion.setTimeScale(effectiveTimeScale())
+      retargetProbe()
+    },
+    { flush: 'sync' },
+  )
   const animate = () => {
     frame = requestAnimationFrame(animate)
     const now = performance.now()
     const deltaSeconds = Math.min(0.08, (now - lastFrameAt) / 1000)
     lastFrameAt = now
-    const probeDelta = probeTargetAnchor.clone().sub(probeCurrentAnchor)
-    const probeDistance = probeDelta.length()
-    const maxStep = visualProbeSpeed * deltaSeconds
-    if (probeDistance <= maxStep || probeDistance <= 0.001) {
-      probeCurrentAnchor.copy(probeTargetAnchor)
-    } else {
-      probeCurrentAnchor.add(probeDelta.multiplyScalar(maxStep / probeDistance))
-    }
+    probeMotion.updateFrame(deltaSeconds, now)
     probe.position.copy(probeCurrentAnchor).add(probeVisualOffset)
     probeMarker.position.copy(probeCurrentAnchor)
-    probe.rotation.y += 0.014
-    probeMarker.rotation.z += 0.01
-    if (routeLine) syncRouteLine()
+    if (effectiveTimeScale() > 0) {
+      probe.rotation.y += 0.014
+      probeMarker.rotation.z += 0.01
+    }
+    updateDynamicRouteLine()
     if (predictionLine || primaryPredictionLine) syncPredictionLines()
     if (originLine) {
       const positions = originLine.geometry.getAttribute('position') as THREE.BufferAttribute
@@ -659,24 +674,7 @@ onMounted(() => {
     const time = performance.now() * 0.001
     for (const material of cloudMaterials) material.uniforms.uTime.value = time
     for (const mesh of cloudMeshes) mesh.lookAt(camera.position)
-    if (cameraTween) {
-      cameraTween.t = Math.min(1, cameraTween.t + 0.045)
-      const eased = 1 - Math.pow(1 - cameraTween.t, 3)
-      camera.position.lerpVectors(cameraTween.start, cameraTween.end, eased)
-      controls.target.lerpVectors(cameraTween.targetStart, cameraTween.targetEnd, eased)
-      if (cameraTween.t >= 1) {
-        cameraTween = null
-        const catchUpDelta = probeCurrentAnchor.clone().sub(controls.target)
-        camera.position.add(catchUpDelta)
-        controls.target.copy(probeCurrentAnchor)
-        lastFollowAnchor.copy(probeCurrentAnchor)
-      }
-    } else if (followLocked) {
-      const followDelta = probeCurrentAnchor.clone().sub(lastFollowAnchor)
-      camera.position.add(followDelta)
-      controls.target.copy(probeCurrentAnchor)
-      lastFollowAnchor.copy(probeCurrentAnchor)
-    }
+    followCamera.update(probeCurrentAnchor)
     const distance = camera.position.distanceTo(controls.target)
     starPoints.visible = distance > 8
     for (const entry of lodEntries) {
@@ -700,6 +698,7 @@ onMounted(() => {
     }
     cancelAnimationFrame(frame)
     stopProbeWatch()
+    stopClockWatch()
     stopRouteWatch()
     stopPredictionWatch()
     renderer.domElement.removeEventListener('click', click)
@@ -713,6 +712,7 @@ onMounted(() => {
       else material.dispose()
     }
     removeLine(routeLine)
+    removeLine(dynamicRouteLine)
     removeLine(predictionLine)
     removeLine(primaryPredictionLine)
     host.value?.replaceChildren()

@@ -32,4 +32,15 @@ def get_probe_navigation(db: Session = Depends(get_db)):
     target = system_detail(db, state.destination_system_id) if state else None
     synchronize_navigation(db, probe, state, target, clock.simulation_datetime)
     db.commit()
-    return navigation_payload(probe, state)
+    return navigation_payload(probe, state, clock.simulation_datetime)
+
+
+@router.post("/navigation/sync", response_model=ProbeNavigationRead)
+def sync_probe_navigation(db: Session = Depends(get_db)):
+    probe = ensure_probe(db)
+    clock, _ = advance_simulation_clock(db)
+    state = latest_navigation_state(db, probe)
+    target = system_detail(db, state.destination_system_id) if state else None
+    synchronize_navigation(db, probe, state, target, clock.simulation_datetime)
+    db.commit()
+    return navigation_payload(probe, state, clock.simulation_datetime)

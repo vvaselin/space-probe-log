@@ -77,6 +77,12 @@ function textValue(key: string, fallback = '-') {
   return typeof value === 'string' ? value : fallback
 }
 
+function logClock() {
+  const value = snapshot.value.mission_clock ?? log.value?.probe_position?.mission_clock
+  if (typeof value === 'string') return value
+  return log.value ? new Date(log.value.generated_at).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '-'
+}
+
 onMounted(async () => {
   try {
     log.value = await api.getLog(String(route.params.id))
@@ -91,7 +97,7 @@ onMounted(async () => {
     <div v-if="error" class="error">{{ error }}</div>
     <article v-if="log" class="log-detail-layout">
       <section class="panel log-detail-main">
-        <p class="muted">T+{{ log.mission_time }} / {{ log.communication_status }} / 信頼度 {{ log.reliability.toFixed(2) }}</p>
+        <p class="muted">{{ logClock() }} / {{ log.communication_status }} / ??? {{ log.reliability.toFixed(2) }}</p>
         <h1>{{ log.title }}</h1>
         <p>{{ log.summary }}</p>
         <div class="log-body log-body--rendered" v-html="renderedBody" />
@@ -114,7 +120,7 @@ onMounted(async () => {
           <h2>状態スナップショット</h2>
           <div class="snapshot-meta">
             <span>現在地: {{ textValue('current_system_id') }}</span>
-            <span>時刻: T+{{ numberValue('mission_time') }}</span>
+            <span>??: {{ logClock() }}</span>
           </div>
           <div class="snapshot-bars">
             <StatusBar label="エネルギー" :value="numberValue('energy')" />

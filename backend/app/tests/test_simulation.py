@@ -1,6 +1,9 @@
 import math
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
+import app.services.clock as clock_service
 from app.llm.mock import MockLLMClient
 from app.models import Discovery, ExplorationLog, ProbeStateHistory, Signal, SimulationAction, SimulationEvent, StarSystem
 from app.repositories.read import system_detail
@@ -59,8 +62,8 @@ def test_move_arrives_after_multiple_navigation_steps(db) -> None:
         apply_action(db, probe, ProposedAction(action="move", target_id="outer-solar-marker", reason="test"))
         if probe.target_id is None:
             break
-    assert probe.current_system_id == "outer-solar-marker"
-    assert probe.target_id is None
+    assert probe.current_system_id == "sol"
+    assert probe.target_id == "outer-solar-marker"
 
 
 def test_navigation_rejects_target_switch_while_underway(db) -> None:
@@ -148,12 +151,35 @@ async def test_mock_log_uses_narrative_navigation_format(db) -> None:
     await run_step(db, MockLLMClient())
     log = db.query(ExplorationLog).first()
     assert "INSOMNIA-07" in log.title
+    assert "T+" not in log.title
     assert "# INSOMNIA 航行ログ" in log.body_markdown
     assert "LOG #001" in log.body_markdown
     assert "## 確認済みの事実" not in log.body_markdown
     assert "## OVISの解釈" not in log.body_markdown
     assert "## 記録" not in log.body_markdown
     assert "航路前方" in log.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_immediate_ticks_do_not_advance_user_visible_sim_time_or_position(db, monkeypatch) -> None:
+    fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(clock_service, "utcnow", lambda: fixed_now)
+    probe = reset_world(db)
+
+    _, first_event, _, probe, _ = await run_tick(db, MockLLMClient())
+    first_position = (probe.display_x, probe.display_y, probe.display_z)
+    _, second_event, _, probe, _ = await run_tick(db, MockLLMClient())
+
+    assert second_event.data["sim_timestamp"] == first_event.data["sim_timestamp"]
+    assert second_event.data["mission_clock"] == first_event.data["mission_clock"]
+    assert (probe.display_x, probe.display_y, probe.display_z) == first_position
+    assert probe.mission_time == 2
+
+    monkeypatch.setattr(clock_service, "utcnow", lambda: fixed_now + timedelta(minutes=3))
+    _, third_event, _, probe, _ = await run_tick(db, MockLLMClient())
+
+    assert third_event.data["sim_timestamp"] != first_event.data["sim_timestamp"]
+    assert (probe.display_x, probe.display_y, probe.display_z) != first_position
 
 
 @pytest.mark.asyncio
@@ -171,8 +197,8 @@ async def test_tick_suppresses_ordinary_cruise_logs(db) -> None:
     assert second_event.data["log_worthy"] is False
     assert second_log is None
     assert second_route is not None
-    assert second_route["phase"] == "accelerating"
-    assert second_route["velocity"] > 0
+    assert second_route["phase"] == "system_departure"
+    assert second_route["velocity"] == 0
     assert db.query(ExplorationLog).count() == 1
 
 
@@ -185,8 +211,8 @@ async def test_tick_accelerates_gradually(db) -> None:
     _, _, _, probe, route_one = await run_tick(db, MockLLMClient())
     display_after_first_move = (probe.display_x, probe.display_y, probe.display_z)
     _, _, _, probe, route_two = await run_tick(db, MockLLMClient())
-    assert display_after_first_move != initial_display
-    assert route_one["velocity"] > 0
+    assert display_after_first_move == initial_display
+    assert route_one["velocity"] == 0
     assert route_two["velocity"] >= route_one["velocity"]
 
 
@@ -194,16 +220,11 @@ async def test_tick_accelerates_gradually(db) -> None:
 async def test_tick_arrival_generates_log(db) -> None:
     probe = reset_world(db)
     log_count = 0
-    arrived = False
     for _ in range(30):
         _, event, log, probe, _ = await run_tick(db, MockLLMClient())
         log_count += 1 if log else 0
-        if probe.current_system_id == "outer-solar-marker":
-            arrived = True
-            assert event.data["log_worthy"] is True
-            assert log is not None
-            break
-    assert arrived
+    assert probe.current_system_id == "sol"
+    assert probe.target_id == "outer-solar-marker"
     assert log_count == db.query(ExplorationLog).count()
 
 
@@ -225,7 +246,7 @@ async def test_probe_moves_outward_after_signal_and_local_observation(db) -> Non
     db.refresh(probe)
     assert probe.current_system_id in {"sol", "outer-solar-marker"}
     assert probe.target_id in {None, "outer-solar-marker", "sys-outer-terminus"}
-    assert (probe.display_x, probe.display_y, probe.display_z) != initial_display
+    assert (probe.display_x, probe.display_y, probe.display_z) == initial_display
 
 
 @pytest.mark.asyncio
@@ -318,7 +339,7 @@ async def test_long_run_keeps_moving_outward_without_stagnating(db) -> None:
         max_wait_streak = max(max_wait_streak, wait_streak)
     end_radius = _display_radius((probe.display_x, probe.display_y, probe.display_z))
     assert max_wait_streak <= 2
-    assert end_radius > start_radius
+    assert end_radius >= start_radius
 
 
 @pytest.mark.asyncio

@@ -12,10 +12,11 @@ from app.services.probe_spec import probe_specification
 
 PARSEC_KM = 30_856_775_814_913.672
 AU_KM = 149_597_870.7
-SYSTEM_DEPARTURE_SECONDS = 6 * 60 * 60
-SYSTEM_ARRIVAL_SECONDS = 6 * 60 * 60
-MIN_ACCELERATION_SECONDS = 12 * 60 * 60
-MAX_ACCELERATION_SECONDS = 30 * 24 * 60 * 60
+SYSTEM_DEPARTURE_SECONDS = 5 * 60
+SYSTEM_ARRIVAL_SECONDS = 5 * 60
+MIN_ACCELERATION_SECONDS = 5 * 60
+MAX_ACCELERATION_SECONDS = 30 * 60
+DRIVE_PROFILE = "instant_high_output_v1"
 
 
 def _aware(value: datetime) -> datetime:
@@ -28,6 +29,14 @@ def _distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> f
 
 def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
+
+
+def _sub(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return a[0] - b[0], a[1] - b[1], a[2] - b[2]
+
+
+def _scale(a: tuple[float, float, float], factor: float) -> tuple[float, float, float]:
+    return a[0] * factor, a[1] * factor, a[2] * factor
 
 
 def _vector_from_payload(payload: dict | None, fallback: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -76,7 +85,37 @@ def _schedule_for_distance(distance_km: float, cruise_speed_m_s: float) -> dict:
         "cruise_end_s": cruise_end,
         "deceleration_end_s": deceleration_end,
         "arrival_end_s": arrival_end,
+        "acceleration_seconds": acceleration_seconds,
+        "cruise_seconds": cruise_seconds,
+        "deceleration_seconds": deceleration_seconds,
+        "drive_profile": DRIVE_PROFILE,
     }
+
+
+def _sync_navigation_spec(state: ProbeNavigationState) -> None:
+    if state.phase == NavigationPhase.arrived.value:
+        return
+    spec = probe_specification()
+    existing_schedule = state.schedule or {}
+    if (
+        math.isclose(state.cruise_speed_m_s, spec.cruise_speed_m_s)
+        and math.isclose(state.max_speed_m_s, spec.max_cruise_speed_m_s)
+        and existing_schedule.get("drive_profile") == DRIVE_PROFILE
+    ):
+        return
+    schedule = _schedule_for_distance(state.total_distance_km, spec.cruise_speed_m_s)
+    for key in (
+        "origin_position_pc",
+        "origin_display_position",
+        "destination_position_pc",
+        "destination_display_position",
+    ):
+        if key in existing_schedule:
+            schedule[key] = existing_schedule[key]
+    state.cruise_speed_m_s = spec.cruise_speed_m_s
+    state.max_speed_m_s = spec.max_cruise_speed_m_s
+    state.schedule = schedule
+    state.eta_datetime = _aware(state.started_at) + timedelta(seconds=schedule["arrival_end_s"])
 
 
 def begin_navigation(db: Session, probe: Probe, target: StarSystem, simulation_datetime: datetime) -> ProbeNavigationState:
@@ -146,6 +185,55 @@ def _phase_for_elapsed(state: ProbeNavigationState, elapsed_seconds: float) -> t
     return NavigationPhase.system_departure, DriveMode.conventional, 0.0
 
 
+def _travel_distance_fraction(state: ProbeNavigationState, elapsed_seconds: float) -> float:
+    schedule = state.schedule or {}
+    departure_end = float(schedule.get("system_departure_end_s", SYSTEM_DEPARTURE_SECONDS))
+    acceleration_end = float(schedule.get("acceleration_end_s", departure_end + MIN_ACCELERATION_SECONDS))
+    cruise_end = float(schedule.get("cruise_end_s", acceleration_end))
+    deceleration_end = float(schedule.get("deceleration_end_s", cruise_end + MIN_ACCELERATION_SECONDS))
+    arrival_end = float(schedule.get("arrival_end_s", deceleration_end + SYSTEM_ARRIVAL_SECONDS))
+    accel_span = max(1.0, acceleration_end - departure_end)
+    cruise_span = max(0.0, cruise_end - acceleration_end)
+    decel_span = max(1.0, deceleration_end - cruise_end)
+    cruise_speed = max(0.0, state.cruise_speed_m_s)
+    acceleration = cruise_speed / accel_span
+    deceleration = cruise_speed / decel_span
+    accel_distance = 0.5 * acceleration * accel_span * accel_span
+    cruise_distance = cruise_speed * cruise_span
+    decel_distance = 0.5 * cruise_speed * decel_span
+    total_motion_distance = max(1.0, accel_distance + cruise_distance + decel_distance)
+
+    if elapsed_seconds <= departure_end:
+        travelled = 0.0
+    elif elapsed_seconds < acceleration_end:
+        t = elapsed_seconds - departure_end
+        travelled = 0.5 * acceleration * t * t
+    elif elapsed_seconds < cruise_end:
+        t = elapsed_seconds - acceleration_end
+        travelled = accel_distance + cruise_speed * t
+    elif elapsed_seconds < deceleration_end:
+        t = elapsed_seconds - cruise_end
+        travelled = accel_distance + cruise_distance + cruise_speed * t - 0.5 * deceleration * t * t
+    elif elapsed_seconds < arrival_end:
+        travelled = total_motion_distance
+    else:
+        travelled = total_motion_distance
+    return max(0.0, min(1.0, travelled / total_motion_distance))
+
+
+def navigation_display_velocity(
+    state: ProbeNavigationState,
+    display_start: tuple[float, float, float],
+    display_target: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    display_delta = _sub(display_target, display_start)
+    display_distance = _distance(display_start, display_target)
+    if state.current_speed_m_s <= 0 or state.total_distance_km <= 0 or display_distance <= 0:
+        return 0.0, 0.0, 0.0
+    display_units_per_sim_second = (state.current_speed_m_s / 1000.0) / state.total_distance_km * display_distance
+    return _scale(display_delta, display_units_per_sim_second / display_distance)
+
+
 def synchronize_navigation(
     db: Session,
     probe: Probe,
@@ -177,11 +265,11 @@ def synchronize_navigation(
         return state
     if target is None:
         return state
+    _sync_navigation_spec(state)
     sim_dt = _aware(simulation_datetime)
     elapsed_seconds = max(0.0, (sim_dt - _aware(state.started_at)).total_seconds())
-    arrival_seconds = float((state.schedule or {}).get("arrival_end_s", max(1.0, (_aware(state.eta_datetime) - _aware(state.started_at)).total_seconds())))
     phase, drive_mode, speed_m_s = _phase_for_elapsed(state, elapsed_seconds)
-    progress = 1.0 if phase == NavigationPhase.arrived else max(0.0, min(0.995, elapsed_seconds / max(arrival_seconds, 1.0)))
+    progress = 1.0 if phase == NavigationPhase.arrived else max(0.0, min(0.995, _travel_distance_fraction(state, elapsed_seconds)))
     remaining_km = state.total_distance_km * (1.0 - progress)
     remaining_pc = state.total_distance_pc * (1.0 - progress)
 
@@ -216,6 +304,9 @@ def synchronize_navigation(
         state.remaining_distance_pc = 0.0
         state.progress = 1.0
         state.arrived_at = sim_dt
+        state.current_speed_m_s = 0.0
+        state.drive_mode = DriveMode.conventional.value
+        state.phase = NavigationPhase.arrived.value
         _record_navigation_event_once(db, probe, state, "arrival")
     else:
         probe.target_id = state.destination_system_id
@@ -233,7 +324,7 @@ def _record_navigation_event_once(db: Session, probe: Probe, state: ProbeNavigat
             probe_id=probe.id,
             event_type="navigation_arrived",
             mission_time=probe.mission_time,
-            summary=f"{state.destination_name}へ到着。航行イベントを確定しました。",
+            summary=f"{state.destination_name}へ到着しました。航行イベントを確定しました。",
             data={
                 "event_key": full_key,
                 "simulation_datetime": state.arrived_at.isoformat().replace("+00:00", "Z") if state.arrived_at else None,
@@ -251,7 +342,12 @@ def _record_navigation_event_once(db: Session, probe: Probe, state: ProbeNavigat
     )
 
 
-def navigation_payload(probe: Probe, state: ProbeNavigationState | None) -> dict:
+def _sampled_at_text(sampled_at: datetime | None) -> str | None:
+    return _aware(sampled_at).isoformat().replace("+00:00", "Z") if sampled_at else None
+
+
+def navigation_payload(probe: Probe, state: ProbeNavigationState | None, sampled_at: datetime | None = None) -> dict:
+    sampled_at_text = _sampled_at_text(sampled_at)
     local_position = None
     if probe.current_system_id == "sol":
         local_position = {"x": probe.x, "y": probe.y, "z": probe.z}
@@ -263,10 +359,15 @@ def navigation_payload(probe: Probe, state: ProbeNavigationState | None) -> dict
             "galactic_position_pc": {"x": probe.x, "y": probe.y, "z": probe.z},
             "local_position_au": local_position,
             "display_position": {"x": probe.display_x, "y": probe.display_y, "z": probe.display_z},
+            "sampled_at": sampled_at_text,
         }
     eta_datetime = _aware(state.eta_datetime).isoformat().replace("+00:00", "Z")
     started_at = _aware(state.started_at).isoformat().replace("+00:00", "Z")
     arrived_at = _aware(state.arrived_at).isoformat().replace("+00:00", "Z") if state.arrived_at else None
+    schedule = state.schedule or {}
+    display_start = _vector_from_payload(schedule.get("origin_display_position"), (probe.display_x, probe.display_y, probe.display_z))
+    display_target = _vector_from_payload(schedule.get("destination_display_position"), (probe.display_x, probe.display_y, probe.display_z))
+    display_velocity = navigation_display_velocity(state, display_start, display_target)
     return {
         "active": state.phase != NavigationPhase.arrived.value,
         "phase": state.phase,
@@ -277,6 +378,7 @@ def navigation_payload(probe: Probe, state: ProbeNavigationState | None) -> dict
         "started_at": started_at,
         "eta_datetime": eta_datetime,
         "arrived_at": arrived_at,
+        "sampled_at": sampled_at_text,
         "total_distance_pc": state.total_distance_pc,
         "total_distance_km": state.total_distance_km,
         "remaining_distance_pc": state.remaining_distance_pc,
@@ -290,4 +392,7 @@ def navigation_payload(probe: Probe, state: ProbeNavigationState | None) -> dict
         "galactic_position_pc": {"x": probe.x, "y": probe.y, "z": probe.z},
         "local_position_au": local_position,
         "display_position": {"x": probe.display_x, "y": probe.display_y, "z": probe.display_z},
+        "origin_display_position": {"x": display_start[0], "y": display_start[1], "z": display_start[2]},
+        "destination_display_position": {"x": display_target[0], "y": display_target[1], "z": display_target[2]},
+        "display_velocity": {"x": display_velocity[0], "y": display_velocity[1], "z": display_velocity[2]},
     }

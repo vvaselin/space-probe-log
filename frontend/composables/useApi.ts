@@ -20,6 +20,7 @@ export function useApi() {
     getProbe: () => request<Probe>('/api/probe'),
     getProbeSpecification: () => request<ProbeSpecification>('/api/probe/specification'),
     getProbeNavigation: () => request<ProbeNavigation>('/api/probe/navigation'),
+    syncProbeNavigation: () => request<ProbeNavigation>('/api/probe/navigation/sync', { method: 'POST' }),
     getLogs: () => request<LogListItem[]>('/api/logs'),
     getLog: (id: string | number) => request<LogDetail>(`/api/logs/${id}`),
     getSystems: () => request<StarSystem[]>('/api/world/systems'),

@@ -56,7 +56,7 @@ def get_map(db: Session = Depends(get_db)):
     probe = ensure_probe(db)
     clock, _ = advance_simulation_clock(db)
     nav_state = latest_navigation_state(db, probe)
-    nav_target = system_detail(db, nav_state.destination_system_id) if nav_state and nav_state.phase != "arrived" else None
+    nav_target = system_detail(db, nav_state.destination_system_id) if nav_state else None
     synchronize_navigation(db, probe, nav_state, nav_target, clock.simulation_datetime)
     ensure_frontier_targets(db, probe, min_unvisited=6)
     db.commit()
@@ -70,7 +70,7 @@ def get_map(db: Session = Depends(get_db)):
     target = system_detail(db, probe.target_id) if probe.target_id else None
     primary_target = next((item for item in all_systems if item.details.get("object_role") == "far_objective"), None)
     latest_action = db.query(SimulationAction).order_by(SimulationAction.id.desc()).first()
-    nav_payload = navigation_payload(probe, nav_state)
+    nav_payload = navigation_payload(probe, nav_state, clock.simulation_datetime)
     map_origin = {
         "id": "earth",
         "name": "地球",
@@ -185,4 +185,9 @@ def get_map(db: Session = Depends(get_db)):
         "focus": {"x": probe.display_x, "y": probe.display_y, "z": probe.display_z},
         "distant_stars": distant_stars(world_seed),
         "real_data_epoch": real_data_epoch(),
+        "clock": {
+            "simulation_datetime": clock.simulation_datetime.isoformat().replace("+00:00", "Z"),
+            "time_scale": clock.time_scale,
+            "clock_state": clock.clock_state,
+        },
     }

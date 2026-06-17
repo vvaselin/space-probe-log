@@ -80,7 +80,7 @@ class OpenAICompatibleLLMClient:
                 raise ValueError("missing body_markdown")
             return GeneratedLog.model_validate(normalized)
         except (ValidationError, TypeError, ValueError):
-            mission_time = int(context.probe_snapshot["mission_time"])
+            log_number = int(context.probe_snapshot.get("log_number", context.probe_snapshot["mission_time"]))
             mission_clock = context.probe_snapshot.get("mission_clock", "2080/05/02 12:00:00 UTC")
             return GeneratedLog(
                 title="INSOMNIA-07 航行ログ",
@@ -89,7 +89,7 @@ class OpenAICompatibleLLMClient:
                     "# INSOMNIA 航行ログ\n"
                     "**探査機: INSOMNIA-07**\n"
                     "**搭載AI: OVIS**\n\n"
-                    f"## LOG #{mission_time:03d}\n"
+                    f"## LOG #{log_number:03d}\n"
                     f"**{mission_clock} - {context.event['event_type']}**\n\n"
                     f"{context.event['summary']}\n\n"
                     "ログ生成応答の整形に失敗したため、入力された観測事実のみを保存した。"

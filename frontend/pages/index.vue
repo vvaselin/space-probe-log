@@ -13,7 +13,6 @@ onBeforeUnmount(() => store.stopCruise())
 const mapKey = computed(() => {
   const map = store.map
   if (!map) return 'map-loading'
-  const focus = map.focus ? `${map.focus.x.toFixed(2)}:${map.focus.y.toFixed(2)}:${map.focus.z.toFixed(2)}` : 'no-focus'
   return [
     'mission-map',
     store.sceneRevision,
@@ -21,13 +20,17 @@ const mapKey = computed(() => {
     map.probe.system_id,
     map.probe.target_id ?? 'idle',
     map.systems.length,
-    focus,
   ].join(':')
 })
 
 const route = computed(() => store.navigation ?? store.probe?.navigation ?? null)
 const missionClock = computed(() => store.probe?.mission_clock ?? '2080/05/02 12:00:00 UTC')
 const selectedLogBody = computed(() => renderMarkdown(selectedLog.value?.body_markdown ?? ''))
+
+function logClock(log: LogListItem | LogDetail) {
+  const clock = log.probe_position?.mission_clock
+  return typeof clock === 'string' ? clock : new Date(log.generated_at).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+}
 
 const phaseLabel = computed(() => {
   switch (route.value?.phase) {
@@ -133,7 +136,7 @@ function renderMarkdown(markdown: string) {
       <p class="hud-kicker">探査機</p>
       <h1>{{ store.probe.name }}</h1>
       <p class="hud-location">{{ missionClock }}</p>
-      <p class="muted">{{ store.probe.current_system_id }} / T+{{ store.probe.mission_time }}</p>
+      <p class="muted">{{ store.probe.current_system_id }}</p>
       <p v-if="store.probe.target_id" class="hud-target">航行中: {{ store.probe.target_id }}</p>
       <p class="hud-mission">{{ store.probe.current_mission }}</p>
 
@@ -173,7 +176,7 @@ function renderMarkdown(markdown: string) {
         :class="{ 'hud-log-item--new': store.latestGeneratedLog?.id === log.id }"
         @click="openLog(log)"
       >
-        <span>T+{{ log.mission_time }} / 信頼度 {{ log.reliability.toFixed(2) }}</span>
+        <span>{{ logClock(log) }} / 信頼度 {{ log.reliability.toFixed(2) }}</span>
         <strong>{{ log.title }}</strong>
         <small>{{ log.summary }}</small>
       </button>
@@ -191,7 +194,7 @@ function renderMarkdown(markdown: string) {
 
     <section v-if="selectedLog" class="hud-log-float">
       <button class="hud-close" type="button" aria-label="ログを閉じる" @click="selectedLog = null">x</button>
-      <p class="muted">T+{{ selectedLog.mission_time }} / {{ selectedLog.communication_status }} / 信頼度 {{ selectedLog.reliability.toFixed(2) }}</p>
+      <p class="muted">{{ logClock(selectedLog) }} / {{ selectedLog.communication_status }} / 信頼度 {{ selectedLog.reliability.toFixed(2) }}</p>
       <h2>{{ selectedLog.title }}</h2>
       <p>{{ selectedLog.summary }}</p>
       <div class="log-body log-body--rendered" v-html="selectedLogBody" />

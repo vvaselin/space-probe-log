@@ -10,7 +10,7 @@ defineProps<{ probe: Probe }>()
       <div>
         <p class="muted">探査機</p>
         <h2>{{ probe.name }}</h2>
-        <p>{{ probe.current_system_id }} / T+{{ probe.mission_time }}</p>
+        <p>{{ probe.current_system_id }} / {{ probe.mission_clock }}</p>
       </div>
       <div class="probe-status__mission">{{ probe.current_mission }}</div>
     </div>

@@ -165,6 +165,7 @@ class ProbeNavigationRead(BaseModel):
     started_at: datetime | None = None
     eta_datetime: datetime | None = None
     arrived_at: datetime | None = None
+    sampled_at: datetime | None = None
     total_distance_pc: float = 0.0
     total_distance_km: float = 0.0
     remaining_distance_pc: float = 0.0
@@ -178,6 +179,9 @@ class ProbeNavigationRead(BaseModel):
     galactic_position_pc: Vector3 | None = None
     local_position_au: Vector3 | None = None
     display_position: Vector3 | None = None
+    origin_display_position: Vector3 | None = None
+    destination_display_position: Vector3 | None = None
+    display_velocity: Vector3 | None = None
 
 
 class ProbeRead(BaseModel):

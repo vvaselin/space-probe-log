@@ -18,9 +18,50 @@ export const useMissionStore = defineStore('mission', () => {
   const lastTick = ref<SimulationTick | null>(null)
   const cruiseRunning = ref(false)
   const tickTimer = ref<ReturnType<typeof setInterval> | null>(null)
+  const navigationSyncTimer = ref<ReturnType<typeof setInterval> | null>(null)
   const lastEvent = ref<SimulationTick['event'] | null>(null)
   const latestGeneratedLog = ref<LogListItem | null>(null)
   const api = useApi()
+
+  function applyNavigationSnapshot(navigationData: ProbeNavigation) {
+    navigation.value = navigationData
+    if (probe.value) {
+      probe.value = { ...probe.value, navigation: navigationData }
+    }
+    if (map.value) {
+      const displayPosition = navigationData.display_position
+      map.value = {
+        ...map.value,
+        probe: {
+          ...map.value.probe,
+          x: displayPosition?.x ?? map.value.probe.x,
+          y: displayPosition?.y ?? map.value.probe.y,
+          z: displayPosition?.z ?? map.value.probe.z,
+          target_id: navigationData.destination_system_id ?? map.value.probe.target_id,
+          navigation: navigationData
+        }
+      }
+      mapRevision.value += 1
+    }
+  }
+
+  function applyClockSnapshot(clockData: SimulationClock) {
+    clock.value = clockData
+    if (map.value) {
+      map.value = {
+        ...map.value,
+        clock: {
+          simulation_datetime: clockData.simulation_datetime,
+          time_scale: clockData.time_scale,
+          clock_state: clockData.clock_state
+        }
+      }
+    }
+  }
+
+  function hasActiveNavigation() {
+    return Boolean(navigation.value?.active || map.value?.probe.navigation?.active || probe.value?.target_id)
+  }
 
   async function loadAll() {
     loading.value = true
@@ -38,11 +79,11 @@ export const useMissionStore = defineStore('mission', () => {
       systems.value = systemsData
       map.value = mapData
       if (mapData.probe.navigation) {
-        navigation.value = mapData.probe.navigation
-        probe.value = { ...probeData, navigation: mapData.probe.navigation }
+        applyNavigationSnapshot(mapData.probe.navigation)
       }
       mapRevision.value += 1
       if (mapRevision.value === 1) sceneRevision.value += 1
+      if (hasActiveNavigation()) startNavigationSync()
       await refreshClock()
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'API error'
@@ -83,10 +124,10 @@ export const useMissionStore = defineStore('mission', () => {
       systems.value = systemsData
       map.value = mapData
       if (mapData.probe.navigation) {
-        navigation.value = mapData.probe.navigation
-        probe.value = { ...lastTick.value.probe, navigation: mapData.probe.navigation }
+        applyNavigationSnapshot(mapData.probe.navigation)
       }
       mapRevision.value += 1
+      if (hasActiveNavigation()) startNavigationSync()
       await refreshClock()
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'API error'
@@ -113,6 +154,20 @@ export const useMissionStore = defineStore('mission', () => {
     }
   }
 
+  function startNavigationSync() {
+    if (navigationSyncTimer.value) return
+    navigationSyncTimer.value = setInterval(() => {
+      void syncNavigationState()
+    }, 15000)
+  }
+
+  function stopNavigationSync() {
+    if (navigationSyncTimer.value) {
+      clearInterval(navigationSyncTimer.value)
+      navigationSyncTimer.value = null
+    }
+  }
+
   async function loadPrompts() {
     error.value = null
     try {
@@ -123,15 +178,20 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function refreshClock() {
-    clock.value = await api.getClock()
+    applyClockSnapshot(await api.getClock())
+  }
+
+  async function syncNavigationState() {
+    if (!hasActiveNavigation()) {
+      stopNavigationSync()
+      return
+    }
     try {
-      const navigationData = await api.getProbeNavigation()
-      navigation.value = navigationData
-      if (probe.value) {
-        probe.value = { ...probe.value, navigation: navigationData }
-      }
+      const navigationData = await api.syncProbeNavigation()
+      applyNavigationSnapshot(navigationData)
+      if (!navigationData.active) stopNavigationSync()
     } catch {
-      // Clock refresh is used by the HUD; keep it resilient if navigation is not initialized yet.
+      // Navigation sync is opportunistic; ticks and map refreshes still carry authoritative state.
     }
   }
 
@@ -152,11 +212,11 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function setClockState(clock_state: 'running' | 'paused') {
-    clock.value = await api.updateClock({ clock_state })
+    applyClockSnapshot(await api.updateClock({ clock_state }))
   }
 
   async function setTimeScale(time_scale: number) {
-    clock.value = await api.updateClock({ time_scale, clock_state: time_scale === 0 ? 'paused' : 'running' })
+    applyClockSnapshot(await api.updateClock({ time_scale, clock_state: time_scale === 0 ? 'paused' : 'running' }))
   }
 
   async function savePrompts(payload: Pick<PromptSettings, 'probe_profile' | 'action_policy' | 'log_writer_style'>) {
@@ -173,6 +233,7 @@ export const useMissionStore = defineStore('mission', () => {
 
   async function reset() {
     stopCruise()
+    stopNavigationSync()
     await api.reset()
     await loadAll()
     sceneRevision.value += 1
@@ -199,6 +260,9 @@ export const useMissionStore = defineStore('mission', () => {
     loadAll,
     loadPrompts,
     refreshClock,
+    syncNavigationState,
+    startNavigationSync,
+    stopNavigationSync,
     loadSimulationSettings,
     saveSimulationSettings,
     savePrompts,

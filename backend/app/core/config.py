@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Space Probe Log"
     database_url: str = "sqlite:///./space_probe_log.db"
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
     default_world_seed: str = "sol-neighborhood-001"
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"

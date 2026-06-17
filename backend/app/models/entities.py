@@ -155,7 +155,7 @@ class SimulationSettings(Base):
     default_time_scale: Mapped[float] = mapped_column(Float, default=360.0)
     advance_offline: Mapped[bool] = mapped_column(Boolean, default=True)
     max_offline_elapsed_seconds: Mapped[int] = mapped_column(Integer, default=86_400)
-    time_scale_presets: Mapped[list[float]] = mapped_column(JSON, default=lambda: [0, 360, 1440, 10080, 525600])
+    time_scale_presets: Mapped[list[float]] = mapped_column(JSON, default=lambda: [1, 10_000, 100_000, 500_000])
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -178,8 +178,8 @@ class ProbeNavigationState(Base):
     remaining_distance_km: Mapped[float] = mapped_column(Float, default=0.0)
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     current_speed_m_s: Mapped[float] = mapped_column(Float, default=0.0)
-    cruise_speed_m_s: Mapped[float] = mapped_column(Float, default=23_983_396.64)
-    max_speed_m_s: Mapped[float] = mapped_column(Float, default=35_975_094.96)
+    cruise_speed_m_s: Mapped[float] = mapped_column(Float, default=239_833_966.4)
+    max_speed_m_s: Mapped[float] = mapped_column(Float, default=239_833_966.4)
     event_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
     schedule: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

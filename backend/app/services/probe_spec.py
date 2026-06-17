@@ -7,8 +7,10 @@ PROBE_NAME = "INSOMNIA-07"
 
 
 def probe_specification() -> ProbeSpecification:
-    cruise_speed_m_s = SPEED_OF_LIGHT_M_S * 0.08
-    max_speed_m_s = SPEED_OF_LIGHT_M_S * 0.12
+    cruise_speed_fraction_c = 0.8
+    max_cruise_speed_fraction_c = 0.8
+    cruise_speed_m_s = SPEED_OF_LIGHT_M_S * cruise_speed_fraction_c
+    max_speed_m_s = SPEED_OF_LIGHT_M_S * max_cruise_speed_fraction_c
     return ProbeSpecification(
         id=PROBE_ID,
         display_name=PROBE_NAME,
@@ -21,10 +23,10 @@ def probe_specification() -> ProbeSpecification:
         dry_mass_kg=30_000,
         propellant_mass_kg=4_000,
         repair_resource_feedstock_kg=8_000,
-        cruise_speed_fraction_c=0.08,
+        cruise_speed_fraction_c=cruise_speed_fraction_c,
         cruise_speed_m_s=cruise_speed_m_s,
         cruise_speed_km_s=cruise_speed_m_s / 1000,
-        max_cruise_speed_fraction_c=0.12,
+        max_cruise_speed_fraction_c=max_cruise_speed_fraction_c,
         max_cruise_speed_m_s=max_speed_m_s,
         max_cruise_speed_km_s=max_speed_m_s / 1000,
         planned_operational_years=500,

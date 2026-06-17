@@ -166,6 +166,7 @@ export interface MapPayload {
   focus?: { x: number; y: number; z: number }
   distant_stars?: Array<{ id: string; x: number; y: number; z: number; size: number; brightness: number; color: string }>
   real_data_epoch?: string | null
+  clock?: { simulation_datetime: string; time_scale: number; clock_state: ClockState | string }
 }
 
 export interface SimulationStep {
@@ -241,6 +242,7 @@ export interface ProbeNavigation {
   started_at?: string | null
   eta_datetime?: string | null
   arrived_at?: string | null
+  sampled_at?: string | null
   total_distance_pc: number
   total_distance_km: number
   remaining_distance_pc: number
@@ -254,6 +256,9 @@ export interface ProbeNavigation {
   galactic_position_pc?: { x: number; y: number; z: number } | null
   local_position_au?: { x: number; y: number; z: number } | null
   display_position?: { x: number; y: number; z: number } | null
+  origin_display_position?: { x: number; y: number; z: number } | null
+  destination_display_position?: { x: number; y: number; z: number } | null
+  display_velocity?: { x: number; y: number; z: number } | null
 }
 
 export interface SimulationClock {
