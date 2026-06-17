@@ -21,7 +21,7 @@ const mapKey = computed(() => {
     <h1>3D 宇宙マップ</h1>
     <div v-if="store.error" class="error">{{ store.error }}</div>
     <ClientOnly>
-      <SpaceMap v-if="store.map" :key="mapKey" :payload="store.map" />
+      <SpaceMap v-if="store.map" :key="mapKey" :payload="store.map" :paused="store.clock?.clock_state === 'paused'" />
     </ClientOnly>
   </main>
 </template>

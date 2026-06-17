@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { Probe } from '~/types/api'
+import type { Probe, SimulationClock } from '~/types/api'
 
-defineProps<{ probe: Probe }>()
+defineProps<{ probe: Probe; clock?: SimulationClock | null }>()
 </script>
 
 <template>
@@ -10,7 +10,7 @@ defineProps<{ probe: Probe }>()
       <div>
         <p class="muted">探査機</p>
         <h2>{{ probe.name }}</h2>
-        <p>{{ probe.current_system_id }} / {{ probe.mission_clock }}</p>
+        <p>{{ probe.current_system_id }} / {{ clock?.mission_clock ?? probe.mission_clock }}</p>
       </div>
       <div class="probe-status__mission">{{ probe.current_mission }}</div>
     </div>

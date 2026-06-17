@@ -8,7 +8,7 @@ onMounted(async () => {
 })
 
 const defaultScale = computed({
-  get: () => store.simulationSettings?.default_time_scale ?? 360,
+  get: () => store.simulationSettings?.default_time_scale ?? 500000,
   set: (value: number) => {
     if (store.simulationSettings) store.simulationSettings.default_time_scale = Number(value)
   }

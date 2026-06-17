@@ -11,6 +11,7 @@ const props = defineProps<{
   compact?: boolean
   followTick?: number
   followEnabled?: boolean
+  paused?: boolean
   hideToolbar?: boolean
 }>()
 const selected = ref<string>('未選択')
@@ -593,8 +594,6 @@ onMounted(() => {
       props.payload.probe.navigation?.phase ?? '',
       props.payload.probe.navigation?.progress ?? 0,
       props.payload.probe.target_id,
-      props.payload.clock?.time_scale ?? 1,
-      props.payload.clock?.clock_state ?? 'running',
     ] as const,
     () => {
       retargetProbe()
@@ -639,15 +638,19 @@ onMounted(() => {
 
   let frame = 0
   let lastFrameAt = performance.now()
-  const effectiveTimeScale = () => (props.payload.clock?.clock_state === 'paused' ? 0 : props.payload.clock?.time_scale ?? 1)
+  const effectiveTimeScale = () => (props.paused || props.payload.clock?.clock_state === 'paused' ? 0 : props.payload.clock?.time_scale ?? 1)
+  const isMotionPaused = () => Boolean(props.paused) || props.payload.clock?.clock_state === 'paused' || effectiveTimeScale() === 0
   const retargetProbe = () => {
     probeMotion.updateSnapshot(props.payload)
   }
   const stopClockWatch = watch(
-    () => [props.payload.clock?.time_scale ?? 1, props.payload.clock?.clock_state ?? 'running'] as const,
+    () => [props.payload.clock?.time_scale ?? 1, props.payload.clock?.clock_state ?? 'running', Boolean(props.paused)] as const,
     () => {
-      probeMotion.setTimeScale(effectiveTimeScale())
-      retargetProbe()
+      if (isMotionPaused()) {
+        probeMotion.pauseMotion()
+        return
+      }
+      probeMotion.resumeMotion(effectiveTimeScale())
     },
     { flush: 'sync' },
   )
@@ -656,25 +659,25 @@ onMounted(() => {
     const now = performance.now()
     const deltaSeconds = Math.min(0.08, (now - lastFrameAt) / 1000)
     lastFrameAt = now
-    probeMotion.updateFrame(deltaSeconds, now)
+    if (!isMotionPaused()) probeMotion.updateFrame(deltaSeconds, now)
     probe.position.copy(probeCurrentAnchor).add(probeVisualOffset)
     probeMarker.position.copy(probeCurrentAnchor)
-    if (effectiveTimeScale() > 0) {
+    if (!isMotionPaused()) {
       probe.rotation.y += 0.014
       probeMarker.rotation.z += 0.01
-    }
-    updateDynamicRouteLine()
-    if (predictionLine || primaryPredictionLine) syncPredictionLines()
-    if (originLine) {
-      const positions = originLine.geometry.getAttribute('position') as THREE.BufferAttribute
-      positions.setXYZ(1, probeCurrentAnchor.x, probeCurrentAnchor.y, probeCurrentAnchor.z)
-      positions.needsUpdate = true
-      originLine.geometry.computeBoundingSphere()
+      updateDynamicRouteLine()
+      if (predictionLine || primaryPredictionLine) syncPredictionLines()
+      if (originLine) {
+        const positions = originLine.geometry.getAttribute('position') as THREE.BufferAttribute
+        positions.setXYZ(1, probeCurrentAnchor.x, probeCurrentAnchor.y, probeCurrentAnchor.z)
+        positions.needsUpdate = true
+        originLine.geometry.computeBoundingSphere()
+      }
     }
     const time = performance.now() * 0.001
     for (const material of cloudMaterials) material.uniforms.uTime.value = time
     for (const mesh of cloudMeshes) mesh.lookAt(camera.position)
-    followCamera.update(probeCurrentAnchor)
+    if (!isMotionPaused()) followCamera.update(probeCurrentAnchor)
     const distance = camera.position.distanceTo(controls.target)
     starPoints.visible = distance > 8
     for (const entry of lodEntries) {

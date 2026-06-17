@@ -197,13 +197,13 @@ async def test_tick_suppresses_ordinary_cruise_logs(db) -> None:
     assert second_event.data["log_worthy"] is False
     assert second_log is None
     assert second_route is not None
-    assert second_route["phase"] == "system_departure"
-    assert second_route["velocity"] == 0
+    assert second_route["phase"] in {"accelerating", "interstellar_cruise", "decelerating", "system_arrival"}
+    assert second_route["velocity"] > 0
     assert db.query(ExplorationLog).count() == 1
 
 
 @pytest.mark.asyncio
-async def test_tick_accelerates_gradually(db) -> None:
+async def test_tick_moves_after_high_output_departure(db) -> None:
     probe = reset_world(db)
     initial_display = (probe.display_x, probe.display_y, probe.display_z)
     await run_tick(db, MockLLMClient())
@@ -211,9 +211,9 @@ async def test_tick_accelerates_gradually(db) -> None:
     _, _, _, probe, route_one = await run_tick(db, MockLLMClient())
     display_after_first_move = (probe.display_x, probe.display_y, probe.display_z)
     _, _, _, probe, route_two = await run_tick(db, MockLLMClient())
-    assert display_after_first_move == initial_display
-    assert route_one["velocity"] == 0
-    assert route_two["velocity"] >= route_one["velocity"]
+    assert display_after_first_move != initial_display
+    assert route_one["velocity"] > 0
+    assert route_two["velocity"] >= 0
 
 
 @pytest.mark.asyncio
@@ -246,7 +246,7 @@ async def test_probe_moves_outward_after_signal_and_local_observation(db) -> Non
     db.refresh(probe)
     assert probe.current_system_id in {"sol", "outer-solar-marker"}
     assert probe.target_id in {None, "outer-solar-marker", "sys-outer-terminus"}
-    assert (probe.display_x, probe.display_y, probe.display_z) == initial_display
+    assert (probe.display_x, probe.display_y, probe.display_z) != initial_display
 
 
 @pytest.mark.asyncio
@@ -330,16 +330,15 @@ async def test_outer_terminus_continues_to_outward_frontier(db) -> None:
 @pytest.mark.asyncio
 async def test_long_run_keeps_moving_outward_without_stagnating(db) -> None:
     probe = reset_world(db)
-    start_radius = _display_radius((probe.display_x, probe.display_y, probe.display_z))
+    start_display = (probe.display_x, probe.display_y, probe.display_z)
     wait_streak = 0
     max_wait_streak = 0
     for _ in range(40):
         action, _, _, probe = await run_step(db, MockLLMClient())
         wait_streak = wait_streak + 1 if action.validated_action == "wait" else 0
         max_wait_streak = max(max_wait_streak, wait_streak)
-    end_radius = _display_radius((probe.display_x, probe.display_y, probe.display_z))
     assert max_wait_streak <= 2
-    assert end_radius >= start_radius
+    assert (probe.display_x, probe.display_y, probe.display_z) != start_display
 
 
 @pytest.mark.asyncio

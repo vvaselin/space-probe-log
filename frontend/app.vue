@@ -15,7 +15,7 @@ onBeforeUnmount(() => {
 
 const presets = computed(() => store.simulationSettings?.time_scale_presets ?? [1, 10000, 100000, 500000])
 const selectedScale = computed({
-  get: () => store.clock?.time_scale ?? 360,
+  get: () => store.clock?.time_scale ?? 500000,
   set: (value: number) => {
     void store.setTimeScale(Number(value))
   }

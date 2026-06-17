@@ -142,7 +142,7 @@ class SimulationClock(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     simulation_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: MISSION_START_AT)
-    time_scale: Mapped[float] = mapped_column(Float, default=360.0)
+    time_scale: Mapped[float] = mapped_column(Float, default=500_000.0)
     clock_state: Mapped[str] = mapped_column(String(24), default="running", index=True)
     last_real_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -152,7 +152,7 @@ class SimulationSettings(Base):
     __tablename__ = "simulation_settings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    default_time_scale: Mapped[float] = mapped_column(Float, default=360.0)
+    default_time_scale: Mapped[float] = mapped_column(Float, default=500_000.0)
     advance_offline: Mapped[bool] = mapped_column(Boolean, default=True)
     max_offline_elapsed_seconds: Mapped[int] = mapped_column(Integer, default=86_400)
     time_scale_presets: Mapped[list[float]] = mapped_column(JSON, default=lambda: [1, 10_000, 100_000, 500_000])

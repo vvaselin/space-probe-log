@@ -47,6 +47,13 @@ export const useMissionStore = defineStore('mission', () => {
 
   function applyClockSnapshot(clockData: SimulationClock) {
     clock.value = clockData
+    if (probe.value) {
+      probe.value = {
+        ...probe.value,
+        mission_clock: clockData.mission_clock,
+        sim_timestamp: clockData.simulation_datetime
+      }
+    }
     if (map.value) {
       map.value = {
         ...map.value,
@@ -212,11 +219,23 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function setClockState(clock_state: 'running' | 'paused') {
-    applyClockSnapshot(await api.updateClock({ clock_state }))
+    if (clock.value && clock_state === 'paused') {
+      stopCruise()
+      applyClockSnapshot({ ...clock.value, clock_state })
+    }
+    const updatedClock = await api.updateClock({ clock_state })
+    applyClockSnapshot(updatedClock)
+    if (hasActiveNavigation()) await syncNavigationState()
   }
 
   async function setTimeScale(time_scale: number) {
-    applyClockSnapshot(await api.updateClock({ time_scale, clock_state: time_scale === 0 ? 'paused' : 'running' }))
+    const clock_state = time_scale === 0 ? 'paused' : 'running'
+    if (clock.value && clock_state === 'paused') {
+      applyClockSnapshot({ ...clock.value, time_scale, clock_state })
+    }
+    const updatedClock = await api.updateClock({ time_scale, clock_state })
+    applyClockSnapshot(updatedClock)
+    if (hasActiveNavigation()) await syncNavigationState()
   }
 
   async function savePrompts(payload: Pick<PromptSettings, 'probe_profile' | 'action_policy' | 'log_writer_style'>) {

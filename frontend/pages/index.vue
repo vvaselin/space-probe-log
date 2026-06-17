@@ -24,7 +24,7 @@ const mapKey = computed(() => {
 })
 
 const route = computed(() => store.navigation ?? store.probe?.navigation ?? null)
-const missionClock = computed(() => store.probe?.mission_clock ?? '2080/05/02 12:00:00 UTC')
+const missionClock = computed(() => store.clock?.mission_clock ?? store.probe?.mission_clock ?? '2080/05/02 12:00:00 UTC')
 const selectedLogBody = computed(() => renderMarkdown(selectedLog.value?.body_markdown ?? ''))
 
 function logClock(log: LogListItem | LogDetail) {
@@ -123,6 +123,7 @@ function renderMarkdown(markdown: string) {
           v-if="store.map"
           :key="mapKey"
           :payload="store.map"
+          :paused="store.clock?.clock_state === 'paused'"
           :follow-enabled="followEnabled"
           hide-toolbar
         />

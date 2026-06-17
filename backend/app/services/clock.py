@@ -6,7 +6,7 @@ from app.core.time import utcnow
 from app.models import MISSION_START_AT, SimulationClock, SimulationSettings
 from app.schemas.domain import ClockState, SimulationClockUpdate, SimulationSettingsUpdate
 
-DEFAULT_TIME_SCALE = 360.0
+DEFAULT_TIME_SCALE = 500_000.0
 DEFAULT_TIME_SCALE_PRESETS = [1.0, 10_000.0, 100_000.0, 500_000.0]
 DEFAULT_OFFLINE_CAP_SECONDS = 86_400
 
@@ -35,11 +35,16 @@ def ensure_simulation_settings(db: Session) -> SimulationSettings:
     else:
         desired = set(DEFAULT_TIME_SCALE_PRESETS)
         presets = {float(item) for item in settings.time_scale_presets or []}
-        if desired.issubset(presets):
-            return settings
-        settings.time_scale_presets = DEFAULT_TIME_SCALE_PRESETS
-        settings.updated_at = utcnow()
-        db.flush()
+        changed = False
+        if not desired.issubset(presets):
+            settings.time_scale_presets = DEFAULT_TIME_SCALE_PRESETS
+            changed = True
+        if settings.default_time_scale in {0.0, 1.0, 360.0, 1440.0, 10080.0, 525600.0}:
+            settings.default_time_scale = DEFAULT_TIME_SCALE
+            changed = True
+        if changed:
+            settings.updated_at = utcnow()
+            db.flush()
     return settings
 
 

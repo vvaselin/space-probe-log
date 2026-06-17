@@ -23,6 +23,7 @@ from app.services.simulation import ensure_frontier_targets
 
 def test_360x_advances_one_real_minute_to_six_sim_hours(db) -> None:
     reset_simulation_clock(db, real_now=datetime(2026, 1, 1, tzinfo=UTC))
+    update_simulation_clock(db, SimulationClockUpdate(time_scale=360), real_now=datetime(2026, 1, 1, tzinfo=UTC))
     clock, _ = advance_simulation_clock(db, real_now=datetime(2026, 1, 1, 0, 1, tzinfo=UTC))
     assert clock.simulation_datetime == datetime(2080, 5, 2, 18, 0, tzinfo=UTC)
 
@@ -36,6 +37,7 @@ def test_1440x_advances_one_real_minute_to_one_sim_day(db) -> None:
 
 def test_pause_resume_does_not_count_paused_real_elapsed(db) -> None:
     reset_simulation_clock(db, real_now=datetime(2026, 1, 1, tzinfo=UTC))
+    update_simulation_clock(db, SimulationClockUpdate(time_scale=360), real_now=datetime(2026, 1, 1, tzinfo=UTC))
     paused, _ = update_simulation_clock(
         db,
         SimulationClockUpdate(clock_state=ClockState.paused),
@@ -54,6 +56,7 @@ def test_pause_resume_does_not_count_paused_real_elapsed(db) -> None:
 
 def test_time_scale_change_first_commits_current_time(db) -> None:
     reset_simulation_clock(db, real_now=datetime(2026, 1, 1, tzinfo=UTC))
+    update_simulation_clock(db, SimulationClockUpdate(time_scale=360), real_now=datetime(2026, 1, 1, tzinfo=UTC))
     changed, _ = update_simulation_clock(db, SimulationClockUpdate(time_scale=1440), real_now=datetime(2026, 1, 1, 0, 1, tzinfo=UTC))
     assert changed.simulation_datetime == datetime(2080, 5, 2, 18, 0, tzinfo=UTC)
     advanced, _ = advance_simulation_clock(db, real_now=datetime(2026, 1, 1, 0, 2, tzinfo=UTC))
@@ -62,6 +65,7 @@ def test_time_scale_change_first_commits_current_time(db) -> None:
 
 def test_offline_cap_limits_real_elapsed(db) -> None:
     reset_simulation_clock(db, real_now=datetime(2026, 1, 1, tzinfo=UTC))
+    update_simulation_clock(db, SimulationClockUpdate(time_scale=360), real_now=datetime(2026, 1, 1, tzinfo=UTC))
     update_simulation_settings(db, SimulationSettingsUpdate(max_offline_elapsed_seconds=60))
     clock, applied = advance_simulation_clock(db, real_now=datetime(2026, 1, 2, tzinfo=UTC))
     assert applied == 60
@@ -71,6 +75,7 @@ def test_offline_cap_limits_real_elapsed(db) -> None:
 def test_default_time_scale_presets_include_realtime(db) -> None:
     settings = ensure_simulation_settings(db)
 
+    assert settings.default_time_scale == 500_000.0
     assert settings.time_scale_presets == [1.0, 10_000.0, 100_000.0, 500_000.0]
 
 
