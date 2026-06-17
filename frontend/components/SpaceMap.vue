@@ -4,11 +4,18 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { pickTextureSet } from '~/assets/texture/registry'
 import type { MapPayload } from '~/types/api'
 
-const props = defineProps<{ payload: MapPayload; compact?: boolean; followTick?: number; hideToolbar?: boolean }>()
+const props = defineProps<{
+  payload: MapPayload
+  compact?: boolean
+  followTick?: number
+  followEnabled?: boolean
+  hideToolbar?: boolean
+}>()
 const selected = ref<string>('未選択')
+const localFollowEnabled = ref(false)
 const host = ref<HTMLDivElement | null>(null)
 let cleanup: (() => void) | null = null
-let followProbe: (() => void) | null = null
+let setProbeFollow: ((enabled: boolean) => void) | null = null
 
 type Selectable = THREE.Object3D & { userData: { label: string } }
 type LodEntry = {
@@ -406,9 +413,10 @@ onMounted(() => {
   }
 
   const probe = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 4), probeMaterial)
-  const probeAnchor = vectorFrom(props.payload.probe)
-  const probePosition = probeAnchor.clone().add(new THREE.Vector3(0.45, 0.95, 0.35))
-  probe.position.copy(probePosition)
+  const probeVisualOffset = new THREE.Vector3(0.45, 0.95, 0.35)
+  let probeTargetAnchor = vectorFrom(props.payload.probe)
+  const probeCurrentAnchor = probeTargetAnchor.clone()
+  probe.position.copy(probeCurrentAnchor.clone().add(probeVisualOffset))
   probe.userData.label = props.payload.probe.name
   scene.add(probe)
   selectable.push(probe as unknown as Selectable)
@@ -417,18 +425,19 @@ onMounted(() => {
     new THREE.RingGeometry(1.05, 1.16, 40),
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.86, side: THREE.DoubleSide })
   )
-  probeMarker.position.copy(probeAnchor)
+  probeMarker.position.copy(probeCurrentAnchor)
   probeMarker.rotation.x = Math.PI / 2
   scene.add(probeMarker)
 
   const origin = props.payload.map_origin
+  let originLine: THREE.Line | null = null
   if (origin) {
     const originPoint = vectorFrom(origin)
-    const outward = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([originPoint, probeMarker.position.clone()]),
+    originLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([originPoint, probeCurrentAnchor.clone()]),
       new THREE.LineBasicMaterial({ color: 0xa7c8ff, transparent: true, opacity: 0.32 })
     )
-    scene.add(outward)
+    scene.add(originLine)
   }
 
   if (props.payload.route.length >= 2) {
@@ -476,25 +485,69 @@ onMounted(() => {
   }
   window.addEventListener('resize', resize)
 
+  const stopProbeWatch = watch(
+    () => [
+      props.payload.probe.x,
+      props.payload.probe.y,
+      props.payload.probe.z,
+      props.payload.probe.target_id,
+    ] as const,
+    () => {
+      probeTargetAnchor = vectorFrom(props.payload.probe)
+    },
+    { flush: 'sync' },
+  )
+
+  let followLocked = false
+  localFollowEnabled.value = false
+  let lastFollowAnchor = probeCurrentAnchor.clone()
   let cameraTween: { start: THREE.Vector3; end: THREE.Vector3; targetStart: THREE.Vector3; targetEnd: THREE.Vector3; t: number } | null = null
-  followProbe = () => {
+  setProbeFollow = (enabled: boolean) => {
+    if (followLocked === enabled) return
+    followLocked = enabled
+    localFollowEnabled.value = enabled
+    cameraTween = null
+    lastFollowAnchor.copy(probeCurrentAnchor)
+    if (!enabled) return
     selected.value = props.payload.probe.name
-    const targetEnd = vectorFrom(props.payload.probe)
-    const offset = new THREE.Vector3(16, 11, 22)
+    const targetEnd = probeCurrentAnchor.clone()
+    const targetShift = targetEnd.clone().sub(controls.target)
     cameraTween = {
       start: camera.position.clone(),
-      end: targetEnd.clone().add(offset),
+      end: camera.position.clone().add(targetShift),
       targetStart: controls.target.clone(),
       targetEnd,
       t: 0,
     }
   }
+  if (props.followEnabled) setProbeFollow(true)
 
   let frame = 0
+  let lastFrameAt = performance.now()
+  const visualProbeSpeed = 2.35
   const animate = () => {
     frame = requestAnimationFrame(animate)
+    const now = performance.now()
+    const deltaSeconds = Math.min(0.08, (now - lastFrameAt) / 1000)
+    lastFrameAt = now
+    const probeDelta = probeTargetAnchor.clone().sub(probeCurrentAnchor)
+    const probeDistance = probeDelta.length()
+    const maxStep = visualProbeSpeed * deltaSeconds
+    if (probeDistance <= maxStep || probeDistance <= 0.001) {
+      probeCurrentAnchor.copy(probeTargetAnchor)
+    } else {
+      probeCurrentAnchor.add(probeDelta.multiplyScalar(maxStep / probeDistance))
+    }
+    probe.position.copy(probeCurrentAnchor).add(probeVisualOffset)
+    probeMarker.position.copy(probeCurrentAnchor)
     probe.rotation.y += 0.014
     probeMarker.rotation.z += 0.01
+    if (originLine) {
+      const positions = originLine.geometry.getAttribute('position') as THREE.BufferAttribute
+      positions.setXYZ(1, probeCurrentAnchor.x, probeCurrentAnchor.y, probeCurrentAnchor.z)
+      positions.needsUpdate = true
+      originLine.geometry.computeBoundingSphere()
+    }
     const time = performance.now() * 0.001
     for (const material of cloudMaterials) material.uniforms.uTime.value = time
     for (const mesh of cloudMeshes) mesh.lookAt(camera.position)
@@ -503,7 +556,18 @@ onMounted(() => {
       const eased = 1 - Math.pow(1 - cameraTween.t, 3)
       camera.position.lerpVectors(cameraTween.start, cameraTween.end, eased)
       controls.target.lerpVectors(cameraTween.targetStart, cameraTween.targetEnd, eased)
-      if (cameraTween.t >= 1) cameraTween = null
+      if (cameraTween.t >= 1) {
+        cameraTween = null
+        const catchUpDelta = probeCurrentAnchor.clone().sub(controls.target)
+        camera.position.add(catchUpDelta)
+        controls.target.copy(probeCurrentAnchor)
+        lastFollowAnchor.copy(probeCurrentAnchor)
+      }
+    } else if (followLocked) {
+      const followDelta = probeCurrentAnchor.clone().sub(lastFollowAnchor)
+      camera.position.add(followDelta)
+      controls.target.copy(probeCurrentAnchor)
+      lastFollowAnchor.copy(probeCurrentAnchor)
     }
     const distance = camera.position.distanceTo(controls.target)
     starPoints.visible = distance > 8
@@ -522,6 +586,7 @@ onMounted(() => {
 
   cleanup = () => {
     cancelAnimationFrame(frame)
+    stopProbeWatch()
     renderer.domElement.removeEventListener('click', click)
     window.removeEventListener('resize', resize)
     renderer.dispose()
@@ -533,11 +598,14 @@ onMounted(() => {
       else material.dispose()
     }
     host.value?.replaceChildren()
-    followProbe = null
+    setProbeFollow = null
   }
 })
 
-watch(() => props.followTick, () => followProbe?.())
+watch(() => props.followTick, () => setProbeFollow?.(!localFollowEnabled.value))
+watch(() => props.followEnabled, (enabled) => {
+  if (typeof enabled === 'boolean') setProbeFollow?.(enabled)
+})
 onBeforeUnmount(() => cleanup?.())
 </script>
 
@@ -545,7 +613,9 @@ onBeforeUnmount(() => cleanup?.())
   <div>
     <div ref="host" class="map-frame" :class="{ 'map-compact': compact }" />
     <div v-if="!hideToolbar" class="map-toolbar">
-      <button type="button" @click="followProbe?.()">探査機を追尾</button>
+      <button type="button" :class="{ 'is-active': localFollowEnabled }" @click="setProbeFollow?.(!localFollowEnabled)">
+        {{ localFollowEnabled ? '追尾解除' : '探査機を追尾' }}
+      </button>
       <span class="map-chip">選択: {{ selected }}</span>
       <span class="map-legend map-legend--star">恒星系</span>
       <span class="map-legend map-legend--waypoint">航行点</span>

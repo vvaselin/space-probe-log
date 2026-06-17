@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.models import CelestialBody, Signal, SimulationAction
 from app.repositories.read import active_universe, route_points, system_detail, systems
 from app.schemas.domain import MapPayload, SystemDetail, SystemRead
-from app.services.simulation import display_probe_offset, ensure_probe
+from app.services.simulation import display_probe_offset, ensure_frontier_targets, ensure_probe
 from app.world.generator import generated_environment_objects, real_data_epoch, stable_seed
 
 router = APIRouter(prefix="/api/world", tags=["world"])
@@ -51,6 +51,8 @@ def get_system(system_id: str, db: Session = Depends(get_db)):
 @router.get("/map", response_model=MapPayload)
 def get_map(db: Session = Depends(get_db)):
     probe = ensure_probe(db)
+    ensure_frontier_targets(db, probe, min_unvisited=6)
+    db.commit()
     universe = active_universe(db)
     world_seed = universe.world_seed if universe else "sol-neighborhood-001"
     all_systems = systems(db)

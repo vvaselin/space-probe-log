@@ -1,5 +1,7 @@
 import math
 import random
+import re
+from datetime import UTC, datetime, timedelta
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -40,6 +42,8 @@ ARRIVAL_DISTANCE = 2.4
 LAUNCH_TARGET_ID = "outer-solar-marker"
 MAIN_BEACON_ROLE = "far_objective"
 MAX_WAIT_STREAK = 1
+CRUISE_LOG_COOLDOWN = 5
+FUEL_LIMITS_ENABLED = False
 
 
 def _distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
@@ -280,7 +284,7 @@ def avoid_stagnation(context: ActionContext, proposed: ProposedAction) -> Propos
         return ProposedAction(action="move", target_id=str(probe["target_id"]), reason="既定の航行目標へ向けて航路を維持する")
     if context.visible_signals:
         return proposed
-    if probe["mission_time"] < 2 or probe["fuel"] < 12 or probe["propulsion"] < 25:
+    if probe["mission_time"] < 2 or probe["propulsion"] < 25:
         return proposed
     if not context.navigation_targets:
         return proposed
@@ -406,7 +410,7 @@ def navigation_director(db: Session, probe: Probe, context: ActionContext, propo
             "detour_signal",
         )
 
-    if probe.fuel < 18 and _can_collect_here(db, probe):
+    if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
         return ProposedAction(action="collect_resource", reason="主航路へ復帰する前に推進剤として利用可能な資源を確保します。"), "resource"
 
     observed_current = _has_observed_current_system(db, probe)
@@ -414,7 +418,7 @@ def navigation_director(db: Session, probe: Probe, context: ActionContext, propo
         return ProposedAction(action="observe", target_id=probe.current_system_id, reason="寄り道先の主要天体を一度だけ基礎観測します。"), "survey"
 
     target = _main_route_target(context)
-    if target and probe.fuel >= 12 and probe.propulsion >= 25:
+    if target and probe.propulsion >= 25:
         return (
             ProposedAction(
                 action="move",
@@ -428,7 +432,7 @@ def navigation_director(db: Session, probe: Probe, context: ActionContext, propo
         return ProposedAction(action="collect_resource", reason="連続待機を避け、航行再開に必要な資源を確保します。"), "resource"
     if proposed.action == "wait" and _wait_streak(db, probe) >= MAX_WAIT_STREAK:
         target = _first_navigation_target(context)
-        if target and probe.fuel >= 12 and probe.propulsion >= 25:
+        if target and probe.propulsion >= 25:
             return ProposedAction(action="move", target_id=target["id"], reason="連続待機を避け、外側の航行候補へ移動します。"), "main_route"
 
     return proposed, _navigation_intent(proposed)
@@ -442,7 +446,7 @@ def _can_collect_here(db: Session, probe: Probe) -> bool:
 
 
 def recovery_action(db: Session, probe: Probe, context: ActionContext, reason: str) -> ProposedAction:
-    if probe.target_id and probe.fuel >= 4 and probe.propulsion >= 25:
+    if probe.target_id and probe.propulsion >= 25:
         return ProposedAction(action="move", target_id=probe.target_id, reason="検証後の補正として、航行中の目標へ移動を継続します。")
     if not probe.target_id and context.visible_signals and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
         return ProposedAction(
@@ -450,10 +454,10 @@ def recovery_action(db: Session, probe: Probe, context: ActionContext, reason: s
             target_id=context.visible_signals[0]["id"],
             reason="検証後の補正として、現在地で未調査の信号を優先します。",
         )
-    if probe.fuel < 18 and _can_collect_here(db, probe):
+    if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
         return ProposedAction(action="collect_resource", reason="燃料余力が低いため、現在地の資源を推進剤として確保します。")
     target = _first_navigation_target(context)
-    if target and probe.fuel >= 12 and probe.propulsion >= 25:
+    if target and probe.propulsion >= 25:
         return ProposedAction(action="move", target_id=target["id"], reason=f"{reason} 外側の航行候補 {target['name']} へ進みます。")
     if _can_collect_here(db, probe):
         return ProposedAction(action="collect_resource", reason="航行再開に備え、現在地で利用可能な資源を確保します。")
@@ -552,6 +556,29 @@ def log_header(snapshot: dict, event: SimulationEvent) -> str:
         f"位置: {snapshot['current_system_id']} / {position}\n"
         f"状況: {event.summary}\n"
         "---------------------"
+    )
+
+
+def scripted_initial_action(probe: Probe) -> ProposedAction | None:
+    if probe.target_id:
+        return ProposedAction(action="move", target_id=probe.target_id, reason="航行中の目標へ向けて巡航を継続する。")
+    if probe.mission_time == 0 and probe.current_system_id == "sol":
+        return ProposedAction(action="move", target_id=LAUNCH_TARGET_ID, reason="発射シークエンスを完了し、太陽系外縁への航路へ入る。")
+    return None
+
+
+def log_header(snapshot: dict, event: SimulationEvent) -> str:
+    log_number = int(snapshot.get("log_number", snapshot["mission_time"]))
+    timestamp = utcnow().strftime("%Y/%m/%d %H:%M:%S UTC")
+    position = f"x={snapshot['x']:.2f}, y={snapshot['y']:.2f}, z={snapshot['z']:.2f}"
+    return (
+        "# INSOMNIA 航行ログ\n"
+        "**探査機: INSOMNIA-07**\n"
+        "**搭載AI: OVIS**\n\n"
+        f"## LOG #{log_number:03d}\n"
+        f"**{timestamp} - {event.event_type}**\n"
+        f"**位置: {snapshot['current_system_id']} / {position}**\n"
+        f"**状況: {event.summary}**"
     )
 
 
@@ -667,6 +694,89 @@ def passive_observations_during_move(
         interpretations.append(
             Interpretation(
                 hypothesis="受動検出された信号は、到着後に寄り道調査の候補になる",
+                confidence=max(0.2, min(0.75, reliability * signal.strength * 0.72)),
+            )
+        )
+    return observations[:3], interpretations
+
+
+def passive_observations_during_move(
+    db: Session,
+    probe: Probe,
+    target: StarSystem,
+    remaining_before_step: float,
+    reliability: float,
+) -> tuple[list[ObservationFact], list[Interpretation]]:
+    target_kind = "航路標の微光" if target.kind == "waypoint" else "恒星光"
+    observations = [
+        ObservationFact(
+            type="passive_sighting",
+            value=f"航路前方に{target.name}の{target_kind}を捉えた",
+            reliability=reliability,
+            sighting_level="detected" if target.kind == "waypoint" else "resolved",
+            source=target.id,
+            distance_hint=f"残距離推定 {remaining_before_step:.1f}",
+        )
+    ]
+    interpretations = [
+        Interpretation(
+            hypothesis="受動観測は航路維持に利用できるが、単独では発見確定には不足している",
+            confidence=min(0.82, reliability * 0.72),
+        )
+    ]
+
+    probe_radius = _display_radius(_vector_from_probe(probe))
+    if probe.current_system_id != "sol" and probe_radius > 18:
+        observations.append(
+            ObservationFact(
+                type="passive_sighting",
+                value="後方視野で太陽系を淡い白点として分離した",
+                reliability=max(0.2, reliability * 0.88),
+                sighting_level="resolved",
+                source="sol",
+                distance_hint="後方視野",
+            )
+        )
+    elif probe_radius > 9:
+        observations.append(
+            ObservationFact(
+                type="passive_sighting",
+                value="後方視野で太陽系内の光度がゆっくり低下している",
+                reliability=max(0.2, reliability * 0.82),
+                sighting_level="detected",
+                source="sol",
+                distance_hint="後方視野",
+            )
+        )
+
+    side_system = _nearest_side_system(db, probe, target)
+    if side_system and len(observations) < 3:
+        observations.append(
+            ObservationFact(
+                type="passive_sighting",
+                value=f"側方星野で{side_system.name}の恒星光に視差変化を記録した",
+                reliability=max(0.2, reliability * 0.8),
+                sighting_level="resolved",
+                source=side_system.id,
+                distance_hint="側方視野",
+            )
+        )
+
+    signal = _passive_signal_hint(db, probe, target)
+    if signal and len(observations) < 3:
+        observations.append(
+            ObservationFact(
+                type="passive_signal",
+                value=f"{signal.kind}の微弱な反射を受動検出した",
+                reliability=max(0.2, min(0.95, reliability * signal.strength)),
+                sighting_level="detected",
+                source=signal.id,
+                distance_hint="航路周辺",
+            )
+        )
+        interpretations.append(
+            Interpretation(
+                hypothesis="受動検出された信号は、到着後に寄り道調査の候補になり得る",
                 confidence=max(0.2, min(0.75, reliability * signal.strength * 0.72)),
             )
         )
@@ -793,16 +903,258 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
     return event, observations, interpretations
 
 
-async def run_step(db: Session, llm: LLMClient) -> tuple[SimulationAction, SimulationEvent, ExplorationLog, Probe]:
-    probe = ensure_probe(db)
-    context = action_context(db, probe)
+def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[SimulationEvent, list[ObservationFact], list[Interpretation]]:
+    observations: list[ObservationFact] = []
+    interpretations: list[Interpretation] = []
+    related_body_id: str | None = None
+    related_signal_id: str | None = None
+    summary = "探査機は待機し、姿勢制御と通信同期を維持した。"
+    event_type = action.action
+
+    if action.action == "move" and action.target_id:
+        target = system_detail(db, action.target_id)
+        assert target is not None
+        previous_target = probe.target_id
+        mission_time_before = probe.mission_time
+        arrived, remaining_before_step = _advance_toward_target(db, probe, target)
+        probe.fuel = max(0, probe.fuel - 2)
+        probe.energy = max(0, probe.energy - 1.5)
+        reliability = _sensor_reliability(probe)
+        if arrived:
+            summary = f"{target.name}へ到着し、航行目標を解除した。"
+            observations.append(ObservationFact(type="navigation", value=f"{target.name}へ到着", reliability=reliability))
+        elif previous_target == target.id:
+            summary = f"{target.name}へ向けて外向き航路を継続した。残距離推定 {remaining_before_step:.1f}。"
+            observations.append(ObservationFact(type="navigation", value=f"{target.name}へ向けた外向き航行を継続", reliability=reliability))
+        elif mission_time_before == 0 and target.id == LAUNCH_TARGET_ID:
+            summary = f"発射シークエンスを完了し、{target.name}への外向き航行を開始した。"
+            observations.append(ObservationFact(type="navigation", value="地球付近から太陽系外縁への航路へ移行", reliability=reliability))
+        else:
+            summary = f"{target.name}への外向き航行を開始した。"
+            observations.append(ObservationFact(type="navigation", value=f"{target.name}への航路を設定", reliability=reliability))
+        passive_observations, passive_interpretations = passive_observations_during_move(
+            db,
+            probe,
+            target,
+            remaining_before_step,
+            reliability,
+        )
+        observations.extend(passive_observations)
+        interpretations.extend(passive_interpretations)
+        interpretations.append(Interpretation(hypothesis="外側へ向かう航路は継続可能である", confidence=min(0.86, reliability * 0.78)))
+
+    elif action.action == "observe":
+        current = system_detail(db, probe.current_system_id)
+        reliability = _sensor_reliability(probe)
+        if current and current.bodies:
+            for body in current.bodies[:3]:
+                related_body_id = related_body_id or body.id
+                observations.append(ObservationFact(type="celestial_body", value=f"{body.name} ({body.body_type})を確認", reliability=reliability))
+            interpretations.append(Interpretation(hypothesis=f"{current.name}は継続調査に値する安定した観測対象である", confidence=reliability * 0.7))
+        elif probe.target_id:
+            observations.append(ObservationFact(type="navigation", value=f"{probe.target_id}へ向けた航行姿勢を維持", reliability=reliability))
+            interpretations.append(Interpretation(hypothesis="太陽系外縁へ向かう航路は安定している", confidence=reliability * 0.62))
+        probe.energy = max(0, probe.energy - 4)
+        probe.storage_used = min(probe.storage_capacity, probe.storage_used + 4)
+        summary = "周辺天体の分類・測距観測を実行した。"
+
+    elif action.action == "investigate_signal" and action.target_id:
+        signal = signal_by_id(db, action.target_id)
+        assert signal is not None
+        reliability = min(0.99, _sensor_reliability(probe) * signal.strength)
+        frequency = signal.details.get("frequency") or signal.details.get("fictional_data", {}).get("frequency") or "未知周波数"
+        observations.append(ObservationFact(type=signal.kind, value=f"{frequency}付近の信号を確認", reliability=reliability))
+        interpretations.append(Interpretation(hypothesis="人工的なビーコンである可能性", confidence=min(0.85, reliability * 0.72)))
+        signal.investigated = True
+        related_signal_id = signal.id
+        related_body_id = signal.body_id
+        probe.energy = max(0, probe.energy - 8)
+        probe.storage_used = min(probe.storage_capacity, probe.storage_used + 6)
+        summary = f"{signal.id}の周期性と強度変化を記録した。"
+
+    elif action.action == "collect_resource":
+        current = db.get(StarSystem, probe.current_system_id)
+        resource_name = "water_ice"
+        quantity = 1.5
+        if current and current.resources:
+            resource_name = max(current.resources, key=lambda key: current.resources[key])
+        probe.collected_resources = {**probe.collected_resources, resource_name: probe.collected_resources.get(resource_name, 0) + quantity}
+        inventory = db.scalar(select(ResourceInventory).where(ResourceInventory.probe_id == probe.id, ResourceInventory.resource_name == resource_name))
+        if inventory is None:
+            inventory = ResourceInventory(probe_id=probe.id, resource_name=resource_name, quantity=0)
+            db.add(inventory)
+        inventory.quantity += quantity
+        fuel_gain = 14.0 if resource_name in {"water_ice", "hydrogen"} else 6.0
+        probe.fuel = min(100, probe.fuel + fuel_gain)
+        probe.energy = max(0, probe.energy - 6)
+        probe.storage_used = min(probe.storage_capacity, probe.storage_used + 3)
+        observations.append(ObservationFact(type="resource", value=f"{resource_name}を{quantity:.1f}単位採取し、燃料を{fuel_gain:.1f}回復", reliability=0.9))
+        interpretations.append(Interpretation(hypothesis="推進剤または修復・冷却材として利用できる可能性", confidence=0.65))
+        summary = f"{resource_name}を{quantity:.1f}単位採取し、航行継続用の燃料へ回した。"
+
+    else:
+        probe.energy = min(100, probe.energy + 2)
+        probe.velocity = 0 if not probe.target_id else probe.velocity
+
+    probe.mission_time += 1
+    probe.last_updated_at = utcnow()
+    event = SimulationEvent(
+        probe_id=probe.id,
+        event_type=event_type,
+        mission_time=probe.mission_time,
+        summary=summary,
+        related_body_id=related_body_id,
+        related_signal_id=related_signal_id,
+        data={"observations": [item.model_dump() for item in observations], "interpretations": [item.model_dump() for item in interpretations]},
+    )
+    db.add(event)
+    db.flush()
+    for obs in observations:
+        if obs.sighting_level != "confirmed":
+            continue
+        db.add(
+            Discovery(
+                probe_id=probe.id,
+                event_id=event.id,
+                target_id=related_signal_id or related_body_id or probe.target_id,
+                observation_type=obs.type,
+                value=obs.value,
+                reliability=obs.reliability,
+                interpretations=[item.model_dump() for item in interpretations],
+            )
+        )
+    return event, observations, interpretations
+
+
+def _route_state(db: Session, probe: Probe) -> dict | None:
+    if not probe.target_id:
+        return None
+    target = system_detail(db, probe.target_id)
+    if target is None:
+        return None
+    current = (probe.display_x, probe.display_y, probe.display_z)
+    destination = display_probe_offset(target)
+    remaining = _distance(current, destination)
+    origin_radius = _display_radius(current)
+    target_radius = _display_radius(destination)
+    total_hint = max(remaining, abs(target_radius - origin_radius), 1.0)
+    progress = max(0.0, min(0.99, 1.0 - remaining / (remaining + total_hint)))
+    return {
+        "target_id": target.id,
+        "target_name": target.name,
+        "progress": progress,
+        "remaining_distance": remaining,
+    }
+
+
+def _deterministic_cruise_action(db: Session, probe: Probe, context: ActionContext) -> tuple[ProposedAction, str]:
     scripted = scripted_initial_action(probe)
     if scripted:
-        proposed = scripted
-        navigation_intent = "main_route"
-    else:
-        llm_proposed = await safe_propose(llm, context)
-        proposed, navigation_intent = navigation_director(db, probe, context, llm_proposed)
+        return scripted, "main_route"
+    if context.visible_signals and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
+        signal = context.visible_signals[0]
+        return ProposedAction(action="investigate_signal", target_id=signal["id"], reason="現在地で未調査の信号を確認する。"), "detour_signal"
+    if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
+        return ProposedAction(action="collect_resource", reason="巡航継続に必要な燃料を確保する。"), "resource"
+    target = _main_route_target(context)
+    if target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"{target['name']}へ向けて主航路を進む。"), "main_route"
+    return ProposedAction(action="wait", reason="実行可能な巡航行動がないため、姿勢制御と通信同期を維持する。"), "recovery"
+
+
+def _recent_log_exists(db: Session, probe: Probe, within: int = CRUISE_LOG_COOLDOWN) -> bool:
+    latest = db.scalar(
+        select(ExplorationLog)
+        .where(ExplorationLog.mission_time >= max(0, probe.mission_time - within))
+        .order_by(ExplorationLog.mission_time.desc())
+        .limit(1)
+    )
+    return latest is not None
+
+
+def _phase_logged(db: Session, phase: str) -> bool:
+    events = db.scalars(select(SimulationEvent).order_by(SimulationEvent.id.desc()).limit(200)).all()
+    return any(event.data.get("log_phase") == phase for event in events)
+
+
+def _log_decision(
+    db: Session,
+    probe: Probe,
+    action: SimulationAction,
+    event: SimulationEvent,
+    observations: list[ObservationFact],
+    force_log: bool = False,
+) -> tuple[bool, str | None]:
+    if force_log:
+        return True, "manual_step"
+    if event.event_type in {"investigate_signal", "collect_resource", "observe"}:
+        return True, event.event_type
+    if action.validated_action != "move":
+        return False, None
+    if event.mission_time == 1:
+        return True, "launch"
+    if any(obs.type == "navigation" and "到着" in obs.value for obs in observations):
+        return True, "arrival"
+    if action.target_id == "sys-outer-terminus" and not _phase_logged(db, "outer_lighthouse_detected"):
+        return True, "outer_lighthouse_detected"
+    if probe.hull < 35 or probe.communication < 35 or probe.energy < 10:
+        return True, "serious_degradation"
+    if _recent_log_exists(db, probe):
+        return False, None
+    return False, None
+
+
+async def _persist_log(
+    db: Session,
+    llm: LLMClient,
+    context: ActionContext,
+    action: SimulationAction,
+    event: SimulationEvent,
+    observations: list[ObservationFact],
+    interpretations: list[Interpretation],
+) -> ExplorationLog:
+    snapshot = probe_snapshot(current_probe(db))
+    generated = await safe_generate_log(
+        llm,
+        LogContext(
+            action={"id": action.id, "action": action.validated_action, "reason": action.reason, "navigation_intent": action.raw_payload.get("navigation_intent")},
+            event={"id": event.id, "event_type": event.event_type, "summary": event.summary},
+            probe_snapshot=snapshot,
+            observations=observations,
+            interpretations=interpretations,
+            prompt_settings=context.prompt_settings,
+        ),
+    )
+    body_markdown = generated.body_markdown
+    if not body_markdown.lstrip().startswith("# INSOMNIA 航行ログ"):
+        body_markdown = f"{log_header(snapshot, event)}\n\n{body_markdown}"
+    body_markdown = re.sub(r"LOG #\d+", f"LOG #{snapshot['log_number']:03d}", body_markdown, count=1)
+    log = ExplorationLog(
+        title=generated.title,
+        summary=generated.summary,
+        body_markdown=body_markdown,
+        mission_time=snapshot["mission_time"],
+        probe_position={"x": snapshot["x"], "y": snapshot["y"], "z": snapshot["z"], "system_id": snapshot["current_system_id"], "target_id": snapshot["target_id"]},
+        related_event_ids=[event.id],
+        related_body_ids=[event.related_body_id] if event.related_body_id else [],
+        probe_state_snapshot=snapshot,
+        communication_status="nominal" if snapshot["communication"] > 40 else "degraded",
+        reliability=generated.reliability,
+    )
+    db.add(log)
+    db.flush()
+    return log
+
+
+async def _execute_action(
+    db: Session,
+    llm: LLMClient,
+    proposed: ProposedAction,
+    navigation_intent: str,
+    context: ActionContext,
+    force_log: bool = False,
+) -> tuple[SimulationAction, SimulationEvent, ExplorationLog | None, Probe, dict | None]:
+    probe = ensure_probe(db)
     validation = validate_with_recovery(db, probe, context, proposed)
     action = SimulationAction(
         probe_id=probe.id,
@@ -818,14 +1170,556 @@ async def run_step(db: Session, llm: LLMClient) -> tuple[SimulationAction, Simul
     db.flush()
     event, observations, interpretations = apply_action(db, probe, validation.action)
     event.action_id = action.id
-    event.data = {**event.data, "navigation_intent": navigation_intent}
+    log_worthy, log_phase = _log_decision(db, probe, action, event, observations, force_log=force_log)
+    event.data = {**event.data, "navigation_intent": navigation_intent, "log_worthy": log_worthy, "log_phase": log_phase}
     snapshot = probe_snapshot(probe)
     db.add(ProbeStateHistory(probe_id=probe.id, mission_time=probe.mission_time, snapshot=snapshot))
+    log = None
+    if log_worthy:
+        log = await _persist_log(db, llm, context, action, event, observations, interpretations)
+    route = _route_state(db, probe)
+    db.commit()
+    db.refresh(probe)
+    db.refresh(event)
+    db.refresh(action)
+    if log:
+        db.refresh(log)
+    return action, event, log, probe, route
+
+
+async def run_step(db: Session, llm: LLMClient) -> tuple[SimulationAction, SimulationEvent, ExplorationLog, Probe]:
+    probe = ensure_probe(db)
+    context = action_context(db, probe)
+    scripted = scripted_initial_action(probe)
+    if scripted:
+        proposed = scripted
+        navigation_intent = "main_route"
+    else:
+        llm_proposed = await safe_propose(llm, context)
+        proposed, navigation_intent = navigation_director(db, probe, context, llm_proposed)
+    action, event, log, probe, _ = await _execute_action(db, llm, proposed, navigation_intent, context, force_log=True)
+    assert log is not None
+    return action, event, log, probe
+
+
+async def run_tick(db: Session, llm: LLMClient) -> tuple[SimulationAction, SimulationEvent, ExplorationLog | None, Probe, dict | None]:
+    probe = ensure_probe(db)
+    context = action_context(db, probe)
+    proposed, navigation_intent = _deterministic_cruise_action(db, probe, context)
+    return await _execute_action(db, llm, proposed, navigation_intent, context, force_log=False)
+
+
+# Final cruise model overrides. These names are resolved at runtime by run_step/run_tick.
+MISSION_START_AT = datetime(2080, 5, 2, 12, 0, 0, tzinfo=UTC)
+SIM_SECONDS_PER_REAL_SECOND = 600
+REAL_SECONDS_PER_TICK = 1.8
+SIM_SECONDS_PER_TICK = int(SIM_SECONDS_PER_REAL_SECOND * REAL_SECONDS_PER_TICK)
+STANDARD_SPEED_SETTING = "標準巡航"
+MAX_CRUISE_SPEED = 4.0
+ACCELERATION_TICKS = 3
+DECELERATION_DISTANCE = 12.0
+
+
+def sim_elapsed_seconds_for_tick(mission_time: int) -> int:
+    return max(0, mission_time) * SIM_SECONDS_PER_TICK
+
+
+def sim_datetime_for_tick(mission_time: int) -> datetime:
+    return MISSION_START_AT + timedelta(seconds=sim_elapsed_seconds_for_tick(mission_time))
+
+
+def mission_clock_for_tick(mission_time: int) -> str:
+    return sim_datetime_for_tick(mission_time).strftime("%Y/%m/%d %H:%M:%S UTC")
+
+
+def mission_time_payload(mission_time: int) -> dict:
+    sim_dt = sim_datetime_for_tick(mission_time)
+    return {
+        "mission_clock": sim_dt.strftime("%Y/%m/%d %H:%M:%S UTC"),
+        "sim_timestamp": sim_dt.isoformat().replace("+00:00", "Z"),
+        "sim_elapsed_seconds": sim_elapsed_seconds_for_tick(mission_time),
+    }
+
+
+def _latest_route_state(db: Session, probe: Probe) -> dict | None:
+    events = db.scalars(
+        select(SimulationEvent)
+        .where(SimulationEvent.probe_id == probe.id)
+        .order_by(SimulationEvent.id.desc())
+        .limit(30)
+    ).all()
+    for event in events:
+        route_state = event.data.get("route_state")
+        if route_state and route_state.get("target_id") == probe.target_id:
+            return route_state
+    return None
+
+
+def _route_vectors(probe: Probe, target: StarSystem) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    return (probe.display_x, probe.display_y, probe.display_z), display_probe_offset(target)
+
+
+def _build_route_state(probe: Probe, target: StarSystem) -> dict:
+    start, destination = _route_vectors(probe, target)
+    return {
+        "target_id": target.id,
+        "target_name": target.name,
+        "route_phase": "course_plotted",
+        "route_started_at_tick": probe.mission_time + 1,
+        "route_from": {"x": start[0], "y": start[1], "z": start[2]},
+        "route_to": {"x": destination[0], "y": destination[1], "z": destination[2]},
+        "route_distance": _distance(start, destination),
+        "speed_setting": STANDARD_SPEED_SETTING,
+        "velocity": 0.0,
+        "progress": 0.0,
+        "remaining_distance": _distance(start, destination),
+    }
+
+
+def _route_progress(route_state: dict, point: tuple[float, float, float]) -> tuple[float, float]:
+    destination = route_state["route_to"]
+    remaining = _distance(point, (destination["x"], destination["y"], destination["z"]))
+    total = max(float(route_state.get("route_distance", remaining)), 1.0)
+    progress = max(0.0, min(1.0, 1.0 - remaining / total))
+    return progress, remaining
+
+
+def _speed_for_route(probe: Probe, route_state: dict, remaining: float) -> tuple[str, float]:
+    ticks_since_start = max(0, probe.mission_time - int(route_state.get("route_started_at_tick", probe.mission_time)))
+    accel_factor = min(1.0, (ticks_since_start + 1) / ACCELERATION_TICKS)
+    decel_factor = max(0.18, min(1.0, remaining / DECELERATION_DISTANCE))
+    velocity = MAX_CRUISE_SPEED * min(accel_factor, decel_factor)
+    if remaining <= ARRIVAL_DISTANCE:
+        return "arrived", remaining
+    if decel_factor < 1.0:
+        return "decelerating", min(velocity, remaining)
+    if accel_factor < 1.0:
+        return "accelerating", min(velocity, remaining)
+    return "cruising", min(velocity, remaining)
+
+
+def _advance_toward_target(db: Session, probe: Probe, target: StarSystem) -> tuple[bool, float, dict]:
+    route_state = _latest_route_state(db, probe)
+    if not route_state:
+        route_state = _build_route_state(probe, target)
+        probe.target_id = target.id
+        probe.velocity = 0.0
+        db.flush()
+        return False, route_state["remaining_distance"], route_state
+
+    current = (probe.display_x, probe.display_y, probe.display_z)
+    destination = route_state["route_to"]
+    destination_tuple = (destination["x"], destination["y"], destination["z"])
+    progress, remaining_before = _route_progress(route_state, current)
+    phase, step_distance = _speed_for_route(probe, route_state, remaining_before)
+
+    if phase == "arrived" or step_distance >= remaining_before:
+        fraction = 1.0
+    else:
+        fraction = max(0.0, min(1.0, step_distance / max(remaining_before, 1e-9)))
+
+    probe.display_x = _lerp(probe.display_x, destination_tuple[0], fraction)
+    probe.display_y = _lerp(probe.display_y, destination_tuple[1], fraction)
+    probe.display_z = _lerp(probe.display_z, destination_tuple[2], fraction)
+    probe.x = _lerp(probe.x, target.x, fraction)
+    probe.y = _lerp(probe.y, target.y, fraction)
+    probe.z = _lerp(probe.z, target.z, fraction)
+
+    new_point = (probe.display_x, probe.display_y, probe.display_z)
+    progress, remaining_after = _route_progress(route_state, new_point)
+    arrived = remaining_after <= ARRIVAL_DISTANCE or fraction >= 1.0
+    if arrived:
+        probe.x, probe.y, probe.z = target.x, target.y, target.z
+        probe.display_x, probe.display_y, probe.display_z = destination_tuple
+        probe.current_system_id = target.id
+        probe.target_id = None
+        probe.velocity = 0.0
+        ensure_frontier_targets(db, probe, min_unvisited=6)
+        phase = "arrived"
+        progress = 1.0
+        remaining_after = 0.0
+    else:
+        probe.target_id = target.id
+        probe.velocity = step_distance
+
+    route_state = {
+        **route_state,
+        "route_phase": phase,
+        "velocity": probe.velocity,
+        "progress": progress,
+        "remaining_distance": remaining_after,
+    }
+    db.flush()
+    return arrived, remaining_before, route_state
+
+
+def scripted_initial_action(probe: Probe) -> ProposedAction | None:
+    if probe.target_id:
+        return ProposedAction(action="move", target_id=probe.target_id, reason="設定済みの航路を継続する。")
+    if probe.mission_time == 0 and probe.current_system_id == "sol":
+        return ProposedAction(action="move", target_id=LAUNCH_TARGET_ID, reason="発射シークエンスを完了し、太陽系外縁への航路を設定する。")
+    return None
+
+
+def log_header(snapshot: dict, event: SimulationEvent) -> str:
+    log_number = int(snapshot.get("log_number", snapshot["mission_time"]))
+    timestamp = snapshot.get("mission_clock") or mission_clock_for_tick(log_number)
+    position = f"x={snapshot['x']:.2f}, y={snapshot['y']:.2f}, z={snapshot['z']:.2f}"
+    return (
+        "# INSOMNIA 航行ログ\n"
+        "**探査機: INSOMNIA-07**\n"
+        "**搭載AI: OVIS**\n\n"
+        f"## LOG #{log_number:03d}\n"
+        f"**{timestamp} - {event.event_type}**\n"
+        f"**位置: {snapshot['current_system_id']} / {position}**\n"
+        f"**状況: {event.summary}**"
+    )
+
+
+def passive_observations_during_move(
+    db: Session,
+    probe: Probe,
+    target: StarSystem,
+    remaining_before_step: float,
+    reliability: float,
+) -> tuple[list[ObservationFact], list[Interpretation]]:
+    target_kind = "航路標の微光" if target.kind == "waypoint" else "恒星光"
+    observations = [
+        ObservationFact(
+            type="passive_sighting",
+            value=f"航路前方に{target.name}の{target_kind}を捉えた",
+            reliability=reliability,
+            sighting_level="detected" if target.kind == "waypoint" else "resolved",
+            source=target.id,
+            distance_hint=f"残距離推定 {remaining_before_step:.1f}",
+        )
+    ]
+    interpretations = [
+        Interpretation(
+            hypothesis="受動観測は航路維持に利用できるが、単独では発見確定には不足している",
+            confidence=min(0.82, reliability * 0.72),
+        )
+    ]
+    probe_radius = _display_radius(_vector_from_probe(probe))
+    if probe.current_system_id != "sol" and probe_radius > 18:
+        observations.append(
+            ObservationFact(
+                type="passive_sighting",
+                value="後方視野で太陽系を淡い白点として分離した",
+                reliability=max(0.2, reliability * 0.88),
+                sighting_level="resolved",
+                source="sol",
+                distance_hint="後方視野",
+            )
+        )
+    elif probe_radius > 9:
+        observations.append(
+            ObservationFact(
+                type="passive_sighting",
+                value="後方視野で太陽系内の光度がゆっくり低下している",
+                reliability=max(0.2, reliability * 0.82),
+                sighting_level="detected",
+                source="sol",
+                distance_hint="後方視野",
+            )
+        )
+    side_system = _nearest_side_system(db, probe, target)
+    if side_system and len(observations) < 3:
+        observations.append(
+            ObservationFact(
+                type="passive_sighting",
+                value=f"側方星野で{side_system.name}の恒星光に視差変化を記録した",
+                reliability=max(0.2, reliability * 0.8),
+                sighting_level="resolved",
+                source=side_system.id,
+                distance_hint="側方視野",
+            )
+        )
+    signal = _passive_signal_hint(db, probe, target)
+    if signal and len(observations) < 3:
+        observations.append(
+            ObservationFact(
+                type="passive_signal",
+                value=f"{signal.kind}の微弱な反射を受動検出した",
+                reliability=max(0.2, min(0.95, reliability * signal.strength)),
+                sighting_level="detected",
+                source=signal.id,
+                distance_hint="航路周辺",
+            )
+        )
+        interpretations.append(
+            Interpretation(
+                hypothesis="受動検出された信号は、到着後に寄り道調査の候補になり得る",
+                confidence=max(0.2, min(0.75, reliability * signal.strength * 0.72)),
+            )
+        )
+    return observations[:3], interpretations
+
+
+def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[SimulationEvent, list[ObservationFact], list[Interpretation]]:
+    observations: list[ObservationFact] = []
+    interpretations: list[Interpretation] = []
+    related_body_id: str | None = None
+    related_signal_id: str | None = None
+    summary = "探査機は待機し、姿勢制御と通信同期を維持した。"
+    event_type = action.action
+    route_state: dict | None = None
+    reliability = _sensor_reliability(probe)
+
+    if action.action == "move" and action.target_id:
+        target = system_detail(db, action.target_id)
+        assert target is not None
+        previous_target = probe.target_id
+        existing_route = _latest_route_state(db, probe) if previous_target == target.id else None
+        if not existing_route:
+            route_state = _build_route_state(probe, target)
+            probe.target_id = target.id
+            probe.velocity = 0.0
+            if probe.mission_time == 0 and target.id == LAUNCH_TARGET_ID:
+                summary = f"発射シークエンスを完了し、{target.name}への航路を設定した。推進は次のtickから開始する。"
+            else:
+                summary = f"{target.name}への航路を設定した。推進は次のtickから開始する。"
+            observations.append(ObservationFact(type="navigation", value=f"{target.name}への航路を設定", reliability=reliability))
+            passive_observations, passive_interpretations = passive_observations_during_move(
+                db,
+                probe,
+                target,
+                route_state["remaining_distance"],
+                reliability,
+            )
+            observations.extend(passive_observations)
+            interpretations.extend(passive_interpretations)
+        else:
+            arrived, remaining_before_step, route_state = _advance_toward_target(db, probe, target)
+            drain_factor = max(0.2, probe.velocity / MAX_CRUISE_SPEED)
+            probe.energy = max(0, probe.energy - 0.35 * drain_factor)
+            if arrived:
+                summary = f"{target.name}へ到着し、航行目標を解除した。"
+                observations.append(ObservationFact(type="navigation", value=f"{target.name}へ到着", reliability=reliability))
+            else:
+                phase_label = {"accelerating": "加速", "cruising": "巡航", "decelerating": "減速"}.get(route_state["route_phase"], "巡航")
+                summary = f"{target.name}へ向けて{phase_label}中。残距離推定 {route_state['remaining_distance']:.1f}。"
+                observations.append(ObservationFact(type="navigation", value=f"{target.name}へ向けた外向き航行を継続", reliability=reliability))
+            passive_observations, passive_interpretations = passive_observations_during_move(
+                db,
+                probe,
+                target,
+                remaining_before_step,
+                reliability,
+            )
+            observations.extend(passive_observations)
+            interpretations.extend(passive_interpretations)
+            interpretations.append(Interpretation(hypothesis="外側へ向かう航路は継続可能である", confidence=min(0.86, reliability * 0.78)))
+
+    elif action.action == "observe":
+        current = system_detail(db, probe.current_system_id)
+        if current and current.bodies:
+            for body in current.bodies[:3]:
+                related_body_id = related_body_id or body.id
+                observations.append(ObservationFact(type="celestial_body", value=f"{body.name} ({body.body_type})を確認", reliability=reliability))
+            interpretations.append(Interpretation(hypothesis=f"{current.name}は継続調査に値する安定した観測対象である", confidence=reliability * 0.7))
+        probe.energy = max(0, probe.energy - 4)
+        probe.storage_used = min(probe.storage_capacity, probe.storage_used + 4)
+        summary = "周辺天体の分類・測距観測を実行した。"
+
+    elif action.action == "investigate_signal" and action.target_id:
+        signal = signal_by_id(db, action.target_id)
+        assert signal is not None
+        reliability = min(0.99, _sensor_reliability(probe) * signal.strength)
+        frequency = signal.details.get("frequency") or signal.details.get("fictional_data", {}).get("frequency") or "未知周波数"
+        observations.append(ObservationFact(type=signal.kind, value=f"{frequency}付近の信号を確認", reliability=reliability))
+        interpretations.append(Interpretation(hypothesis="人工的なビーコンである可能性", confidence=min(0.85, reliability * 0.72)))
+        signal.investigated = True
+        related_signal_id = signal.id
+        related_body_id = signal.body_id
+        probe.energy = max(0, probe.energy - 8)
+        probe.storage_used = min(probe.storage_capacity, probe.storage_used + 6)
+        summary = f"{signal.id}の周期性と強度変化を記録した。"
+
+    elif action.action == "collect_resource":
+        current = db.get(StarSystem, probe.current_system_id)
+        resource_name = max(current.resources, key=lambda key: current.resources[key]) if current and current.resources else "water_ice"
+        quantity = 1.5
+        probe.collected_resources = {**probe.collected_resources, resource_name: probe.collected_resources.get(resource_name, 0) + quantity}
+        inventory = db.scalar(select(ResourceInventory).where(ResourceInventory.probe_id == probe.id, ResourceInventory.resource_name == resource_name))
+        if inventory is None:
+            inventory = ResourceInventory(probe_id=probe.id, resource_name=resource_name, quantity=0)
+            db.add(inventory)
+        inventory.quantity += quantity
+        probe.energy = max(0, probe.energy - 6)
+        probe.storage_used = min(probe.storage_capacity, probe.storage_used + 3)
+        observations.append(ObservationFact(type="resource", value=f"{resource_name}を{quantity:.1f}単位採取", reliability=0.9))
+        interpretations.append(Interpretation(hypothesis="推進剤または修復・冷却材として利用できる可能性", confidence=0.65))
+        summary = f"{resource_name}を{quantity:.1f}単位採取し、航行継続用の燃料へ回した。"
+
+    else:
+        probe.energy = min(100, probe.energy + 2)
+        probe.velocity = 0 if not probe.target_id else probe.velocity
+
+    probe.mission_time += 1
+    probe.last_updated_at = utcnow()
+    event_payload = {
+        "observations": [item.model_dump() for item in observations],
+        "interpretations": [item.model_dump() for item in interpretations],
+        **mission_time_payload(probe.mission_time - 1),
+    }
+    if route_state:
+        event_payload.update(
+            {
+                "route_state": route_state,
+                "route_phase": route_state["route_phase"],
+                "route_started_at_tick": route_state["route_started_at_tick"],
+                "route_from": route_state["route_from"],
+                "route_to": route_state["route_to"],
+                "route_distance": route_state["route_distance"],
+                "speed_setting": route_state["speed_setting"],
+                "remaining_distance": route_state["remaining_distance"],
+                "next_target_name": route_state["target_name"],
+            }
+        )
+    event = SimulationEvent(
+        probe_id=probe.id,
+        event_type=event_type,
+        mission_time=probe.mission_time,
+        summary=summary,
+        related_body_id=related_body_id,
+        related_signal_id=related_signal_id,
+        data=event_payload,
+    )
+    db.add(event)
+    db.flush()
+    for obs in observations:
+        if obs.sighting_level != "confirmed":
+            continue
+        db.add(
+            Discovery(
+                probe_id=probe.id,
+                event_id=event.id,
+                target_id=related_signal_id or related_body_id or probe.target_id,
+                observation_type=obs.type,
+                value=obs.value,
+                reliability=obs.reliability,
+                interpretations=[item.model_dump() for item in interpretations],
+            )
+        )
+    return event, observations, interpretations
+
+
+def _route_state(db: Session, probe: Probe) -> dict | None:
+    route_state = _latest_route_state(db, probe)
+    if not route_state:
+        return None
+    return {
+        "target_id": route_state["target_id"],
+        "target_name": route_state["target_name"],
+        "phase": route_state["route_phase"],
+        "velocity": float(route_state.get("velocity", probe.velocity)),
+        "speed_setting": route_state.get("speed_setting", STANDARD_SPEED_SETTING),
+        "progress": float(route_state.get("progress", 0.0)),
+        "remaining_distance": float(route_state.get("remaining_distance", 0.0)),
+    }
+
+
+def _deterministic_cruise_action(db: Session, probe: Probe, context: ActionContext) -> tuple[ProposedAction, str]:
+    scripted = scripted_initial_action(probe)
+    if scripted:
+        return scripted, "main_route"
+    if context.visible_signals and probe.energy >= 8 and probe.sensors >= 10 and probe.storage_used + 6 <= probe.storage_capacity:
+        signal = context.visible_signals[0]
+        return ProposedAction(action="investigate_signal", target_id=signal["id"], reason="現在地で未調査の信号を確認する。"), "detour_signal"
+    if FUEL_LIMITS_ENABLED and probe.fuel < 18 and _can_collect_here(db, probe):
+        return ProposedAction(action="collect_resource", reason="巡航継続に必要な燃料を確保する。"), "resource"
+    target = _main_route_target(context)
+    if target and probe.propulsion >= 25:
+        return ProposedAction(action="move", target_id=target["id"], reason=f"{target['name']}へ向けて主航路を設定する。"), "main_route"
+    return ProposedAction(action="wait", reason="実行可能な巡航行動がないため、姿勢制御と通信同期を維持する。"), "recovery"
+
+
+def _log_decision(
+    db: Session,
+    probe: Probe,
+    action: SimulationAction,
+    event: SimulationEvent,
+    observations: list[ObservationFact],
+    force_log: bool = False,
+) -> tuple[bool, str | None]:
+    if force_log:
+        return True, "manual_step"
+    route_phase = event.data.get("route_phase")
+    if route_phase == "course_plotted":
+        return True, "course_plotted"
+    if event.event_type in {"investigate_signal", "collect_resource", "observe"}:
+        return True, event.event_type
+    if action.validated_action != "move":
+        return False, None
+    if route_phase == "arrived":
+        return True, "arrival"
+    if action.target_id == "sys-outer-terminus" and not _phase_logged(db, "outer_lighthouse_detected"):
+        return True, "outer_lighthouse_detected"
+    if probe.hull < 35 or probe.communication < 35 or probe.energy < 10:
+        return True, "serious_degradation"
+    return False, None
+
+
+def _snapshot_with_event_data(probe: Probe, event: SimulationEvent | None = None) -> dict:
+    snapshot = {**probe_snapshot(probe), **mission_time_payload(probe.mission_time)}
+    if event:
+        for key in ["mission_clock", "sim_timestamp", "sim_elapsed_seconds"]:
+            if key in event.data:
+                snapshot[key] = event.data[key]
+        route_keys = [
+            "route_phase",
+            "route_started_at_tick",
+            "route_from",
+            "route_to",
+            "route_distance",
+            "speed_setting",
+            "remaining_distance",
+            "next_target_name",
+        ]
+        for key in route_keys:
+            if key in event.data:
+                snapshot[key] = event.data[key]
+    return snapshot
+
+
+async def _persist_log(
+    db: Session,
+    llm: LLMClient,
+    context: ActionContext,
+    action: SimulationAction,
+    event: SimulationEvent,
+    observations: list[ObservationFact],
+    interpretations: list[Interpretation],
+) -> ExplorationLog:
+    probe = current_probe(db)
+    snapshot = _snapshot_with_event_data(probe, event)
+    snapshot["log_number"] = db.query(ExplorationLog).count() + 1
     generated = await safe_generate_log(
         llm,
         LogContext(
-            action={"id": action.id, "action": action.validated_action, "reason": action.reason, "navigation_intent": navigation_intent},
-            event={"id": event.id, "event_type": event.event_type, "summary": event.summary},
+            action={
+                "id": action.id,
+                "action": action.validated_action,
+                "reason": action.reason,
+                "navigation_intent": action.raw_payload.get("navigation_intent"),
+                "route_phase": event.data.get("route_phase"),
+                "velocity": probe.velocity,
+                "speed_setting": event.data.get("speed_setting", STANDARD_SPEED_SETTING),
+                "remaining_distance": event.data.get("remaining_distance"),
+                "next_target_name": event.data.get("next_target_name"),
+            },
+            event={
+                "id": event.id,
+                "event_type": event.event_type,
+                "summary": event.summary,
+                **mission_time_payload(event.mission_time),
+                "route_phase": event.data.get("route_phase"),
+                "velocity": probe.velocity,
+                "speed_setting": event.data.get("speed_setting", STANDARD_SPEED_SETTING),
+                "remaining_distance": event.data.get("remaining_distance"),
+                "next_target_name": event.data.get("next_target_name"),
+            },
             probe_snapshot=snapshot,
             observations=observations,
             interpretations=interpretations,
@@ -833,24 +1727,70 @@ async def run_step(db: Session, llm: LLMClient) -> tuple[SimulationAction, Simul
         ),
     )
     body_markdown = generated.body_markdown
-    if not body_markdown.lstrip().startswith("---------------------"):
+    if not body_markdown.lstrip().startswith("# INSOMNIA 航行ログ"):
         body_markdown = f"{log_header(snapshot, event)}\n\n{body_markdown}"
+    body_markdown = re.sub(r"LOG #\d+", f"LOG #{snapshot['log_number']:03d}", body_markdown, count=1)
     log = ExplorationLog(
         title=generated.title,
         summary=generated.summary,
         body_markdown=body_markdown,
-        mission_time=probe.mission_time,
-        probe_position={"x": probe.x, "y": probe.y, "z": probe.z, "system_id": probe.current_system_id, "target_id": probe.target_id},
+        mission_time=snapshot["mission_time"],
+        probe_position={
+            "x": snapshot["x"],
+            "y": snapshot["y"],
+            "z": snapshot["z"],
+            "system_id": snapshot["current_system_id"],
+            "target_id": snapshot["target_id"],
+            **mission_time_payload(snapshot["mission_time"]),
+        },
         related_event_ids=[event.id],
         related_body_ids=[event.related_body_id] if event.related_body_id else [],
         probe_state_snapshot=snapshot,
-        communication_status="nominal" if probe.communication > 40 else "degraded",
+        communication_status="nominal" if snapshot["communication"] > 40 else "degraded",
         reliability=generated.reliability,
     )
     db.add(log)
+    db.flush()
+    return log
+
+
+async def _execute_action(
+    db: Session,
+    llm: LLMClient,
+    proposed: ProposedAction,
+    navigation_intent: str,
+    context: ActionContext,
+    force_log: bool = False,
+) -> tuple[SimulationAction, SimulationEvent, ExplorationLog | None, Probe, dict | None]:
+    probe = ensure_probe(db)
+    validation = validate_with_recovery(db, probe, context, proposed)
+    action = SimulationAction(
+        probe_id=probe.id,
+        proposed_action=proposed.action,
+        validated_action=validation.action.action,
+        target_id=validation.action.target_id,
+        reason=validation.action.reason,
+        status=validation.status,
+        validation_message=validation.message,
+        raw_payload={**proposed.model_dump(), "navigation_intent": navigation_intent},
+    )
+    db.add(action)
+    db.flush()
+    event, observations, interpretations = apply_action(db, probe, validation.action)
+    event.action_id = action.id
+    log_worthy, log_phase = _log_decision(db, probe, action, event, observations, force_log=force_log)
+    event.data = {**event.data, "navigation_intent": navigation_intent, "log_worthy": log_worthy, "log_phase": log_phase}
+    action.raw_payload = {**action.raw_payload, **{key: event.data[key] for key in event.data if key.startswith("route_") or key in {"speed_setting", "remaining_distance", "next_target_name"}}}
+    snapshot = _snapshot_with_event_data(probe, event)
+    db.add(ProbeStateHistory(probe_id=probe.id, mission_time=probe.mission_time, snapshot=snapshot))
+    log = None
+    if log_worthy:
+        log = await _persist_log(db, llm, context, action, event, observations, interpretations)
+    route = _route_state(db, probe)
     db.commit()
     db.refresh(probe)
-    db.refresh(log)
     db.refresh(event)
     db.refresh(action)
-    return action, event, log, probe
+    if log:
+        db.refresh(log)
+    return action, event, log, probe, route

@@ -100,7 +100,7 @@ onMounted(async () => {
       <aside class="panel log-detail-aside">
         <section>
           <h2>観測事実</h2>
-          <p v-if="!log.observations.length" class="muted">新規の観測事実はありません。</p>
+          <p v-if="!log.observations.length" class="muted">新しい観測事実はありません。</p>
           <p v-for="obs in log.observations" :key="`${obs.type}-${obs.value}`">{{ obs.type }}: {{ obs.value }} ({{ obs.reliability.toFixed(2) }})</p>
         </section>
 
@@ -118,7 +118,6 @@ onMounted(async () => {
           </div>
           <div class="snapshot-bars">
             <StatusBar label="エネルギー" :value="numberValue('energy')" />
-            <StatusBar label="燃料" :value="numberValue('fuel')" />
             <StatusBar label="船体" :value="numberValue('hull')" />
             <StatusBar label="通信" :value="numberValue('communication')" />
             <StatusBar label="センサー" :value="numberValue('sensors')" />
@@ -130,7 +129,7 @@ onMounted(async () => {
         <section>
           <h2>発見と資源</h2>
           <p>発見済み天体: {{ discoveries.length ? discoveries.join(', ') : 'なし' }}</p>
-          <p>収集資源: {{ Object.keys(resources).length ? JSON.stringify(resources) : 'なし' }}</p>
+          <p>取得資源: {{ Object.keys(resources).length ? JSON.stringify(resources) : 'なし' }}</p>
         </section>
 
         <details class="snapshot-raw">

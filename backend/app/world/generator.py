@@ -988,6 +988,67 @@ def _seeded_outer_terminus(world_seed: str) -> SystemSpec:
     )
 
 
+def _seeded_waypoints(world_seed: str) -> list[SystemSpec]:
+    waypoint_defs = [
+        ("outer-solar-marker", "外縁航路標", (1.9, -0.28, 0.22), 1),
+        ("heliopause-gate", "ヘリオポーズ境界", (3.2, 0.42, -0.36), 2),
+        ("interstellar-corridor", "星間回廊入口", (5.1, 0.9, 0.72), 3),
+    ]
+    waypoints: list[SystemSpec] = []
+    for waypoint_id, name, local, order in waypoint_defs:
+        position = _orient_local(world_seed, local[0], local[1], local[2])
+        display = (position[0] * 18, position[1] * 18, position[2] * 18)
+        waypoints.append(navigation_waypoint(waypoint_id, name, position, display, order))
+    return waypoints
+
+
+def _seeded_outer_terminus(world_seed: str) -> SystemSpec:
+    seed = stable_seed(world_seed, "outer-terminus")
+    position = _orient_local(world_seed, 14.0, -4.0, 7.0)
+    display = (position[0] * 18, position[1] * 18, position[2] * 18)
+    return SystemSpec(
+        id="sys-outer-terminus",
+        name="外縁灯台",
+        position=position,
+        display=display,
+        generated_seed=str(seed),
+        has_life=False,
+        resources={"unknown_reflective_ice": 4.0},
+        details={
+            "star": {"name": "外縁灯台", "spectral_type": "A", "fictional": True},
+            "object_role": "far_objective",
+            "navigation_order": 99,
+            "description": "太陽系外縁の主航路ビーコンとして使われる遠方目標。",
+            "visual_data": {"texture_key": "star_blue_01", "emissive": "#dbeafe", "emission_strength": 1.2},
+            "fictional_data": {},
+        },
+        bodies=[
+            BodySpec(
+                id="outer-terminus-star",
+                name="外縁灯台 主星",
+                body_type="star",
+                orbit_radius_km=None,
+                radius_km=1_100_000,
+                sim=position,
+                display=display,
+                display_radius=2.2,
+                details={"spectral_type": "A", "fictional": True, "visual_data": {"texture_key": "star_blue_01"}},
+            )
+        ],
+        signals=[
+            SignalSpec(
+                id="signal-outer-terminus-1",
+                kind="distant_navigation_pulse",
+                strength=0.38,
+                position=position,
+                display=(display[0], display[1] + 2.0, display[2]),
+                body_id="outer-terminus-star",
+                details={"frequency": "0.72GHz", "periodic": True},
+            )
+        ],
+    )
+
+
 def generate_world(world_seed: str) -> list[SystemSpec]:
     coordinates = [(3, 1, -2), (4, -2, 3), (6, 2, 1)]
     nearby = [fictional_system(world_seed, i + 1, coord) for i, coord in enumerate(coordinates)]

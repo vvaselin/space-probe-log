@@ -28,4 +28,7 @@ def probe_snapshot(probe: Probe) -> dict[str, Any]:
         "discovered_body_ids": probe.discovered_body_ids,
         "current_mission": probe.current_mission,
         "mission_time": probe.mission_time,
+        "mission_clock": probe.mission_clock,
+        "sim_timestamp": probe.sim_timestamp,
+        "sim_elapsed_seconds": probe.sim_elapsed_seconds,
     }

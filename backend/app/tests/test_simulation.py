@@ -7,7 +7,7 @@ from app.repositories.read import system_detail
 from app.schemas.domain import ProposedAction
 from app.services.action_validation import validate_action
 from app.services.reset import reset_world
-from app.services.simulation import _display_radius, apply_action, run_step
+from app.services.simulation import _display_radius, apply_action, run_step, run_tick
 
 
 class InvalidTargetLLMClient(MockLLMClient):
@@ -20,22 +20,25 @@ class WaitLLMClient(MockLLMClient):
         return ProposedAction(action="wait", reason="test wait")
 
 
-def test_move_rejected_when_fuel_is_low(db) -> None:
+def test_move_allowed_when_fuel_is_low(db) -> None:
     probe = reset_world(db)
     probe.fuel = 1
     result = validate_action(db, probe, ProposedAction(action="move", target_id="sys-1", reason="test"))
-    assert result.fallback_used
-    assert result.action.action == "wait"
+    assert not result.fallback_used
+    assert result.action.action == "move"
 
 
-def test_move_starts_navigation_without_instant_arrival(db) -> None:
+def test_move_plots_course_without_instant_motion(db) -> None:
     probe = reset_world(db)
+    start_display = (probe.display_x, probe.display_y, probe.display_z)
     target = system_detail(db, "outer-solar-marker")
     assert target is not None
     event, observations, _ = apply_action(db, probe, ProposedAction(action="move", target_id="outer-solar-marker", reason="test"))
     assert probe.current_system_id == "sol"
     assert probe.target_id == "outer-solar-marker"
-    assert (probe.display_x, probe.display_y, probe.display_z) != (target.display_x, target.display_y, target.display_z)
+    assert (probe.display_x, probe.display_y, probe.display_z) == start_display
+    assert event.data["route_phase"] == "course_plotted"
+    assert probe.velocity == 0
     assert any(obs.type == "passive_sighting" for obs in observations)
     assert any(obs.sighting_level in {"detected", "resolved"} for obs in observations)
     assert any(item["type"] == "passive_sighting" for item in event.data["observations"])
@@ -52,7 +55,7 @@ def test_passive_move_observations_do_not_create_discoveries(db) -> None:
 
 def test_move_arrives_after_multiple_navigation_steps(db) -> None:
     probe = reset_world(db)
-    for _ in range(8):
+    for _ in range(30):
         apply_action(db, probe, ProposedAction(action="move", target_id="outer-solar-marker", reason="test"))
         if probe.target_id is None:
             break
@@ -134,34 +137,95 @@ def test_reset_restores_initial_state(db) -> None:
     assert restored.fuel == 100
     assert restored.current_system_id == "sol"
     assert restored.current_mission == "太陽系外縁へ向かう段階航行"
+    assert restored.mission_clock == "2080/05/02 12:00:00 UTC"
+    assert restored.sim_elapsed_seconds == 0
     assert db.query(Signal).count() >= 4
 
 
 @pytest.mark.asyncio
-async def test_mock_log_separates_facts_and_ovis_interpretation(db) -> None:
+async def test_mock_log_uses_narrative_navigation_format(db) -> None:
     reset_world(db)
     await run_step(db, MockLLMClient())
     log = db.query(ExplorationLog).first()
     assert "INSOMNIA-07" in log.title
-    assert "INSOMNIA-07 航行ログ" in log.body_markdown
+    assert "# INSOMNIA 航行ログ" in log.body_markdown
     assert "LOG #001" in log.body_markdown
-    assert "## 確認済みの事実" in log.body_markdown
-    assert "## OVISの解釈" in log.body_markdown
-    assert "## 記録" in log.body_markdown
+    assert "## 確認済みの事実" not in log.body_markdown
+    assert "## OVISの解釈" not in log.body_markdown
+    assert "## 記録" not in log.body_markdown
     assert "航路前方" in log.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_tick_suppresses_ordinary_cruise_logs(db) -> None:
+    reset_world(db)
+    _, first_event, first_log, probe, first_route = await run_tick(db, MockLLMClient())
+    assert first_event.data["log_worthy"] is True
+    assert first_log is not None
+    assert first_route is not None
+    assert first_route["phase"] == "course_plotted"
+    assert first_route["velocity"] == 0
+    assert first_log.body_markdown.count("2080/05/02 12:00:00 UTC") >= 1
+    assert all(token not in first_log.body_markdown for token in ["2024", "2026", "XX", "??"])
+    _, second_event, second_log, probe, second_route = await run_tick(db, MockLLMClient())
+    assert second_event.data["log_worthy"] is False
+    assert second_log is None
+    assert second_route is not None
+    assert second_route["phase"] == "accelerating"
+    assert second_route["velocity"] > 0
+    assert db.query(ExplorationLog).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_tick_accelerates_gradually(db) -> None:
+    probe = reset_world(db)
+    initial_display = (probe.display_x, probe.display_y, probe.display_z)
+    await run_tick(db, MockLLMClient())
+    assert (probe.display_x, probe.display_y, probe.display_z) == initial_display
+    _, _, _, probe, route_one = await run_tick(db, MockLLMClient())
+    display_after_first_move = (probe.display_x, probe.display_y, probe.display_z)
+    _, _, _, probe, route_two = await run_tick(db, MockLLMClient())
+    assert display_after_first_move != initial_display
+    assert route_one["velocity"] > 0
+    assert route_two["velocity"] >= route_one["velocity"]
+
+
+@pytest.mark.asyncio
+async def test_tick_arrival_generates_log(db) -> None:
+    probe = reset_world(db)
+    log_count = 0
+    arrived = False
+    for _ in range(30):
+        _, event, log, probe, _ = await run_tick(db, MockLLMClient())
+        log_count += 1 if log else 0
+        if probe.current_system_id == "outer-solar-marker":
+            arrived = True
+            assert event.data["log_worthy"] is True
+            assert log is not None
+            break
+    assert arrived
+    assert log_count == db.query(ExplorationLog).count()
+
+
+def test_far_objective_uses_outer_lighthouse_name(db) -> None:
+    reset_world(db, "seed-a")
+    objective = db.get(StarSystem, "sys-outer-terminus")
+    assert objective is not None
+    assert objective.name == "外縁灯台"
+    assert "白端航路標" not in objective.name
 
 
 @pytest.mark.asyncio
 async def test_probe_moves_outward_after_signal_and_local_observation(db) -> None:
     probe = reset_world(db)
-    initial_radius = math.sqrt(probe.display_x ** 2 + probe.display_y ** 2 + probe.display_z ** 2)
+    initial_display = (probe.display_x, probe.display_y, probe.display_z)
     await run_step(db, MockLLMClient())
     await run_step(db, MockLLMClient())
     await run_step(db, MockLLMClient())
     db.refresh(probe)
     assert probe.current_system_id in {"sol", "outer-solar-marker"}
     assert probe.target_id in {None, "outer-solar-marker", "sys-outer-terminus"}
-    assert math.sqrt(probe.display_x ** 2 + probe.display_y ** 2 + probe.display_z ** 2) > initial_radius
+    assert (probe.display_x, probe.display_y, probe.display_z) != initial_display
 
 
 @pytest.mark.asyncio

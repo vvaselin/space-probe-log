@@ -1,4 +1,4 @@
-import type { LogDetail, LogListItem, MapPayload, Probe, PromptSettings, SimulationStep, StarSystem } from '~/types/api'
+import type { LogDetail, LogListItem, MapPayload, Probe, PromptSettings, SimulationStep, SimulationTick, StarSystem } from '~/types/api'
 
 export function useApi() {
   const config = useRuntimeConfig()
@@ -26,6 +26,7 @@ export function useApi() {
     savePrompts: (payload: Pick<PromptSettings, 'probe_profile' | 'action_policy' | 'log_writer_style'>) =>
       request<PromptSettings>('/api/settings/prompts', { method: 'PUT', body: JSON.stringify(payload) }),
     step: () => request<SimulationStep>('/api/simulation/step', { method: 'POST' }),
+    tick: () => request<SimulationTick>('/api/simulation/tick', { method: 'POST' }),
     reset: (worldSeed?: string) => request<Probe>('/api/simulation/reset', { method: 'POST', body: JSON.stringify({ world_seed: worldSeed }) })
   }
 }

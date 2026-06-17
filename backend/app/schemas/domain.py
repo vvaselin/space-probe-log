@@ -104,6 +104,9 @@ class ProbeRead(BaseModel):
     current_mission: str
     last_updated_at: datetime
     mission_time: int
+    mission_clock: str
+    sim_timestamp: str
+    sim_elapsed_seconds: int
 
 
 class BodyRead(BaseModel):
@@ -209,3 +212,17 @@ class SimulationStepResponse(BaseModel):
     event: dict[str, Any]
     log: LogListItem
     probe: ProbeRead
+    mission_clock: str | None = None
+    sim_timestamp: str | None = None
+    sim_elapsed_seconds: int | None = None
+
+
+class SimulationTickResponse(BaseModel):
+    action: dict[str, Any]
+    event: dict[str, Any]
+    log: LogListItem | None = None
+    probe: ProbeRead
+    route: dict[str, Any] | None = None
+    mission_clock: str
+    sim_timestamp: str
+    sim_elapsed_seconds: int

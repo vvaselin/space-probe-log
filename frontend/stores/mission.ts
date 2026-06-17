@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { LogListItem, MapPayload, Probe, PromptSettings, SimulationStep, StarSystem } from '~/types/api'
+import type { LogListItem, MapPayload, Probe, PromptSettings, SimulationStep, SimulationTick, StarSystem } from '~/types/api'
 
 export const useMissionStore = defineStore('mission', () => {
   const probe = ref<Probe | null>(null)
@@ -10,6 +10,11 @@ export const useMissionStore = defineStore('mission', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const lastStep = ref<SimulationStep | null>(null)
+  const lastTick = ref<SimulationTick | null>(null)
+  const cruiseRunning = ref(false)
+  const tickTimer = ref<ReturnType<typeof setInterval> | null>(null)
+  const lastEvent = ref<SimulationTick['event'] | null>(null)
+  const latestGeneratedLog = ref<LogListItem | null>(null)
   const api = useApi()
 
   async function loadAll() {
@@ -46,6 +51,48 @@ export const useMissionStore = defineStore('mission', () => {
     }
   }
 
+  async function runTick() {
+    if (loading.value) return
+    loading.value = true
+    error.value = null
+    try {
+      lastTick.value = await api.tick()
+      probe.value = lastTick.value.probe
+      lastEvent.value = lastTick.value.event
+      latestGeneratedLog.value = lastTick.value.log
+      const [logsData, systemsData, mapData] = await Promise.all([
+        api.getLogs(),
+        api.getSystems(),
+        api.getMap()
+      ])
+      logs.value = logsData
+      systems.value = systemsData
+      map.value = mapData
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'API error'
+      stopCruise()
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function startCruise() {
+    if (tickTimer.value) return
+    cruiseRunning.value = true
+    void runTick()
+    tickTimer.value = setInterval(() => {
+      void runTick()
+    }, 1800)
+  }
+
+  function stopCruise() {
+    cruiseRunning.value = false
+    if (tickTimer.value) {
+      clearInterval(tickTimer.value)
+      tickTimer.value = null
+    }
+  }
+
   async function loadPrompts() {
     error.value = null
     try {
@@ -68,9 +115,31 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function reset() {
+    stopCruise()
     await api.reset()
     await loadAll()
   }
 
-  return { probe, logs, systems, map, prompts, loading, error, lastStep, loadAll, loadPrompts, savePrompts, runStep, reset }
+  return {
+    probe,
+    logs,
+    systems,
+    map,
+    prompts,
+    loading,
+    error,
+    lastStep,
+    lastTick,
+    cruiseRunning,
+    lastEvent,
+    latestGeneratedLog,
+    loadAll,
+    loadPrompts,
+    savePrompts,
+    runStep,
+    runTick,
+    startCruise,
+    stopCruise,
+    reset
+  }
 })

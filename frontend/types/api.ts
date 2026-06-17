@@ -23,6 +23,9 @@ export interface Probe {
   current_mission: string
   last_updated_at: string
   mission_time: number
+  mission_clock: string
+  sim_timestamp: string
+  sim_elapsed_seconds: number
 }
 
 export interface LogListItem {
@@ -162,9 +165,31 @@ export interface MapPayload {
 
 export interface SimulationStep {
   action: Record<string, unknown>
-  event: { id: number; event_type: string; summary: string; mission_time: number }
+  event: { id: number; event_type: string; summary: string; mission_time: number; mission_clock?: string; sim_timestamp?: string; sim_elapsed_seconds?: number }
   log: LogListItem
   probe: Probe
+  mission_clock?: string
+  sim_timestamp?: string
+  sim_elapsed_seconds?: number
+}
+
+export interface SimulationTick {
+  action: Record<string, unknown>
+  event: { id: number; event_type: string; summary: string; mission_time: number; log_worthy: boolean; mission_clock: string; sim_timestamp: string; sim_elapsed_seconds: number }
+  log: LogListItem | null
+  probe: Probe
+  route: {
+    target_id: string
+    target_name: string
+    phase: 'course_plotted' | 'accelerating' | 'cruising' | 'decelerating' | 'arrived' | string
+    velocity: number
+    speed_setting: string
+    progress: number
+    remaining_distance: number
+  } | null
+  mission_clock: string
+  sim_timestamp: string
+  sim_elapsed_seconds: number
 }
 
 export interface PromptSettings {

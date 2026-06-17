@@ -6,6 +6,8 @@ from app.models import Probe
 from app.repositories.read import signal_by_id, system_detail
 from app.schemas.domain import ProposedAction
 
+FUEL_LIMITS_ENABLED = False
+
 
 @dataclass
 class ValidationResult:
@@ -32,9 +34,9 @@ def validate_action(db: Session, probe: Probe, proposed: ProposedAction) -> Vali
             return fallback("存在しない恒星系または航行目標が指定されました。")
         if probe.target_id and proposed.target_id != probe.target_id:
             return fallback("航行中の目標と異なる移動先は受け付けません。")
-        if probe.fuel < 4:
+        if FUEL_LIMITS_ENABLED and probe.fuel < 4:
             return fallback("燃料不足のため移動できません。")
-        if not probe.target_id and probe.fuel < 12:
+        if FUEL_LIMITS_ENABLED and not probe.target_id and probe.fuel < 12:
             return fallback("新規航行を開始するには燃料が不足しています。")
         if probe.propulsion < 25:
             return fallback("推進系の耐久値が不足しているため移動できません。")

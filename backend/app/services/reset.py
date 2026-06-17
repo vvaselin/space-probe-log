@@ -1,7 +1,6 @@
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.core.time import utcnow
 from app.models import (
     CelestialBody,
@@ -40,9 +39,11 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         PromptSettings,
     ]:
         db.execute(delete(model))
+
     universe = Universe(world_seed=seed, active=True, reset_at=utcnow())
     db.add(universe)
     db.flush()
+
     for spec in generate_world(seed):
         system = StarSystem(
             id=spec.id,
@@ -101,6 +102,7 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
                     details=signal.details,
                 )
             )
+
     db.flush()
     earth = db.get(CelestialBody, "earth")
     probe = Probe(
@@ -129,17 +131,10 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         collected_resources={},
         mission_time=0,
     )
-    probe.current_mission = "太陽系外縁へ向かう段階航行"
     db.add(probe)
+
     probe_profile, action_policy, log_writer_style = load_prompt_defaults()
-    db.add(
-        PromptSettings(
-            id=1,
-            probe_profile=probe_profile,
-            action_policy=action_policy,
-            log_writer_style=log_writer_style,
-        )
-    )
+    db.add(PromptSettings(id=1, probe_profile=probe_profile, action_policy=action_policy, log_writer_style=log_writer_style))
     db.flush()
     db.add(ProbeStateHistory(probe_id=probe.id, mission_time=probe.mission_time, snapshot=probe_snapshot(probe)))
     db.commit()

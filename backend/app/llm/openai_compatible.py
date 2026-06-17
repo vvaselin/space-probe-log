@@ -57,19 +57,19 @@ class OpenAICompatibleLLMClient:
         prompts = context.prompt_settings
         data = await self._complete_json(
             "Return only JSON with exactly these keys: title, summary, body_markdown, reliability. "
-            "title must be a string. summary must be a string. body_markdown must be a markdown string. "
-            "reliability must be a number from 0.0 to 1.0. "
+            "Use only the mission_clock, sim_timestamp, position, route, observations, and interpretations present in the payload. "
+            "Never invent dates or use placeholders like 2024, 2026, XX, or ??. "
             "Write like a quiet first-person navigation journal from OVIS, not a dry report. "
-            "Use restrained wonder grounded in sensor facts, similar to a fictional exploration blog. "
-            "Avoid merely repeating the action summary or turning the body into bullet points. "
-            "The application will prepend the transmission header, so do not invent dates or locations. "
+            "If route_phase is course_plotted, describe the route decision while the probe remains stopped. "
+            "If route_phase is accelerating, cruising, or decelerating, describe gradual motion and the given velocity/remaining_distance. "
+            "If route_phase is arrived, describe the arrival and zero velocity. "
             "Observation facts may include sighting_level: detected, resolved, or confirmed. "
             "detected means the sensor only picked up a faint sign; narrate it as an unconfirmed sighting. "
             "resolved means it matches a known object and can be named. "
             "confirmed means an explicit observe or investigate action verified it. "
-            "For move logs, include passive_sighting or passive_signal details when present so the log is not only a distance report. "
-            "The markdown body must include separate sections named '確認済みの事実' and 'OVISの解釈'. "
             "Do not add unconfirmed world facts, damage, resources, life, or discoveries. "
+            "Do not use fixed report sections named '確認済みの事実', 'OVISの解釈', or '記録'. "
+            "Prefer the required INSOMNIA navigation-log shape from the style prompt. "
             f"Log writer style:\n{prompts.get('log_writer_style', '')}",
             context.model_dump(),
         )
@@ -79,15 +79,19 @@ class OpenAICompatibleLLMClient:
                 raise ValueError("missing body_markdown")
             return GeneratedLog.model_validate(normalized)
         except (ValidationError, TypeError, ValueError):
+            mission_time = int(context.probe_snapshot["mission_time"])
+            mission_clock = context.probe_snapshot.get("mission_clock", "2080/05/02 12:00:00 UTC")
             return GeneratedLog(
                 title="INSOMNIA-07 航行ログ",
                 summary=context.event["summary"],
                 body_markdown=(
-                    "## 確認済みの事実\n"
-                    "ログ生成応答が不正だったため、入力された観測事実だけを保存しました。\n\n"
-                    "## OVISの解釈\n"
-                    "通信文の整形に失敗しました。記録の信頼度を下げて保持します。\n\n"
-                    f"## 航行メモ\n{context.event['summary']}"
+                    "# INSOMNIA 航行ログ\n"
+                    "**探査機: INSOMNIA-07**\n"
+                    "**搭載AI: OVIS**\n\n"
+                    f"## LOG #{mission_time:03d}\n"
+                    f"**{mission_clock} - {context.event['event_type']}**\n\n"
+                    f"{context.event['summary']}\n\n"
+                    "ログ生成応答の整形に失敗したため、入力された観測事実のみを保存した。"
                 ),
                 reliability=0.5,
             )

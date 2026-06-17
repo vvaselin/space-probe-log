@@ -5,7 +5,7 @@ onMounted(() => store.loadAll())
 
 <template>
   <main class="page">
-    <h1>3D宇宙マップ</h1>
+    <h1>3D 宇宙マップ</h1>
     <div v-if="store.error" class="error">{{ store.error }}</div>
     <ClientOnly>
       <SpaceMap v-if="store.map" :payload="store.map" />

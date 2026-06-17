@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
@@ -7,6 +7,16 @@ from sqlalchemy.types import JSON
 
 from app.core.time import utcnow
 from app.db.base import Base
+
+
+MISSION_START_AT = datetime(2080, 5, 2, 12, 0, 0, tzinfo=UTC)
+SIM_SECONDS_PER_REAL_SECOND = 600
+REAL_SECONDS_PER_TICK = 1.8
+SIM_SECONDS_PER_TICK = int(SIM_SECONDS_PER_REAL_SECOND * REAL_SECONDS_PER_TICK)
+
+
+def _sim_datetime_for_tick(mission_time: int) -> datetime:
+    return MISSION_START_AT + timedelta(seconds=max(0, mission_time) * SIM_SECONDS_PER_TICK)
 
 
 class Universe(Base):
@@ -113,6 +123,18 @@ class Probe(Base):
     last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     discovered_body_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     collected_resources: Mapped[dict[str, float]] = mapped_column(JSON, default=dict)
+
+    @property
+    def sim_elapsed_seconds(self) -> int:
+        return max(0, self.mission_time) * SIM_SECONDS_PER_TICK
+
+    @property
+    def sim_timestamp(self) -> str:
+        return _sim_datetime_for_tick(self.mission_time).isoformat().replace("+00:00", "Z")
+
+    @property
+    def mission_clock(self) -> str:
+        return _sim_datetime_for_tick(self.mission_time).strftime("%Y/%m/%d %H:%M:%S UTC")
 
 
 class ProbeStateHistory(Base):
