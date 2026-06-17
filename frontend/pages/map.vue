@@ -1,6 +1,8 @@
 <script setup lang="ts">
 const store = useMissionStore()
-onMounted(() => store.loadAll())
+onMounted(() => {
+  void store.refreshMap()
+})
 
 const mapKey = computed(() => {
   const map = store.map
@@ -8,6 +10,7 @@ const mapKey = computed(() => {
   return [
     'map-page',
     store.sceneRevision,
+    store.mapRevision,
     map.probe.id,
     map.probe.system_id,
     map.probe.target_id ?? 'idle',

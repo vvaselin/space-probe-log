@@ -18,6 +18,14 @@ MIN_ACCELERATION_SECONDS = 5 * 60
 MAX_ACCELERATION_SECONDS = 30 * 60
 DRIVE_PROFILE = "instant_high_output_v1"
 
+PHASE_LABELS = {
+    NavigationPhase.system_departure.value: "恒星系離脱",
+    NavigationPhase.accelerating.value: "加速",
+    NavigationPhase.interstellar_cruise.value: "巡航",
+    NavigationPhase.decelerating.value: "減速",
+    NavigationPhase.system_arrival.value: "到着処理",
+}
+
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
@@ -234,6 +242,14 @@ def navigation_display_velocity(
     return _scale(display_delta, display_units_per_sim_second / display_distance)
 
 
+def _sync_probe_mission_text(probe: Probe, state: ProbeNavigationState) -> None:
+    if state.phase == NavigationPhase.arrived.value:
+        probe.current_mission = f"{state.destination_name}に到着。次の航路選定待ち。"
+        return
+    phase_label = PHASE_LABELS.get(state.phase, "航行")
+    probe.current_mission = f"{state.destination_name}へ向けて{phase_label}中。進行率 {state.progress * 100:.1f}%。"
+
+
 def synchronize_navigation(
     db: Session,
     probe: Probe,
@@ -260,6 +276,7 @@ def synchronize_navigation(
             probe.current_system_id = target.id
         probe.target_id = None
         probe.velocity = 0.0
+        _sync_probe_mission_text(probe, state)
         state.updated_at = utcnow()
         db.flush()
         return state
@@ -307,9 +324,11 @@ def synchronize_navigation(
         state.current_speed_m_s = 0.0
         state.drive_mode = DriveMode.conventional.value
         state.phase = NavigationPhase.arrived.value
+        _sync_probe_mission_text(probe, state)
         _record_navigation_event_once(db, probe, state, "arrival")
     else:
         probe.target_id = state.destination_system_id
+        _sync_probe_mission_text(probe, state)
     db.flush()
     return state
 
@@ -330,12 +349,14 @@ def _record_navigation_event_once(db: Session, probe: Probe, state: ProbeNavigat
                 "simulation_datetime": state.arrived_at.isoformat().replace("+00:00", "Z") if state.arrived_at else None,
                 "mission_clock": mission_clock_text(state.arrived_at or state.eta_datetime),
                 "navigation_phase": state.phase,
+                "route_phase": state.phase,
                 "drive_mode": state.drive_mode,
                 "current_speed_m_s": 0.0,
                 "destination_id": state.destination_system_id,
                 "destination_name": state.destination_name,
                 "remaining_distance_km": 0.0,
                 "remaining_distance_pc": 0.0,
+                "remaining_distance": 0.0,
                 "eta_datetime": _aware(state.eta_datetime).isoformat().replace("+00:00", "Z"),
             },
         )

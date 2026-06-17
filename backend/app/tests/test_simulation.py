@@ -9,6 +9,7 @@ from app.models import Discovery, ExplorationLog, ProbeStateHistory, Signal, Sim
 from app.repositories.read import system_detail
 from app.schemas.domain import ProposedAction
 from app.services.action_validation import validate_action
+from app.services.navigation import begin_navigation, synchronize_navigation
 from app.services.reset import reset_world
 from app.services.simulation import _display_radius, apply_action, run_step, run_tick
 
@@ -226,6 +227,27 @@ async def test_tick_arrival_generates_log(db) -> None:
     assert probe.current_system_id == "sol"
     assert probe.target_id == "outer-solar-marker"
     assert log_count == db.query(ExplorationLog).count()
+
+
+@pytest.mark.asyncio
+async def test_tick_logs_arrival_that_was_finalized_by_navigation_sync(db) -> None:
+    probe = reset_world(db)
+    target = db.get(StarSystem, "outer-solar-marker")
+    state = begin_navigation(db, probe, target, datetime(2080, 5, 2, 12, tzinfo=UTC))
+    synchronize_navigation(db, probe, state, target, state.eta_datetime + timedelta(seconds=1))
+
+    assert state.phase == "arrived"
+    assert db.query(ExplorationLog).count() == 0
+
+    _, event, log, probe, route = await run_tick(db, MockLLMClient())
+
+    assert event.event_type == "navigation_arrived"
+    assert event.data["log_phase"] == "arrival"
+    assert log is not None
+    assert route is not None
+    assert route["phase"] == "arrived"
+    assert probe.current_system_id == "outer-solar-marker"
+    assert db.query(ExplorationLog).count() == 1
 
 
 def test_far_objective_uses_outer_lighthouse_name(db) -> None:

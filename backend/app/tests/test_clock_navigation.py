@@ -268,6 +268,8 @@ def test_arrival_updates_probe_and_navigation_atomically(db) -> None:
     assert state.current_speed_m_s == 0.0
     assert probe.current_system_id == target.id
     assert probe.target_id is None
+    assert "到着" in probe.current_mission
+    assert "進行率" not in probe.current_mission
     assert (probe.display_x, probe.display_y, probe.display_z) == pytest.approx((target.display_x, target.display_y, target.display_z))
 
 

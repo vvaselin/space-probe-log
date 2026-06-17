@@ -105,6 +105,45 @@ export const useMissionStore = defineStore('mission', () => {
     }
   }
 
+  async function refreshLogs() {
+    loading.value = true
+    error.value = null
+    try {
+      logs.value = await api.getLogs()
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'API error'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function refreshMap() {
+    loading.value = true
+    error.value = null
+    try {
+      const [probeData, systemsData, mapData, clockData] = await Promise.all([
+        api.getProbe(),
+        api.getSystems(),
+        api.getMap(),
+        api.getClock()
+      ])
+      probe.value = probeData
+      navigation.value = probeData.navigation ?? mapData.probe.navigation ?? null
+      systems.value = systemsData
+      map.value = mapData
+      if (mapData.probe.navigation) {
+        applyNavigationSnapshot(mapData.probe.navigation)
+      }
+      mapRevision.value += 1
+      applyClockSnapshot(clockData)
+      if (hasActiveNavigation()) startNavigationSync()
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'API error'
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function runStep() {
     loading.value = true
     error.value = null
@@ -312,6 +351,8 @@ export const useMissionStore = defineStore('mission', () => {
     lastEvent,
     latestGeneratedLog,
     loadAll,
+    refreshLogs,
+    refreshMap,
     loadPrompts,
     refreshClock,
     syncNavigationState,

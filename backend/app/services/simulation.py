@@ -682,6 +682,23 @@ def _phase_logged(db: Session, phase: str) -> bool:
     return any(event.data.get("log_phase") == phase for event in events)
 
 
+def _log_exists_for_event(db: Session, event_id: int) -> bool:
+    logs = db.scalars(select(ExplorationLog).order_by(ExplorationLog.id.desc()).limit(200)).all()
+    return any(event_id in (log.related_event_ids or []) for log in logs)
+
+
+def _pending_navigation_arrival_event(db: Session, probe: Probe) -> SimulationEvent | None:
+    event = db.scalar(
+        select(SimulationEvent)
+        .where(SimulationEvent.probe_id == probe.id, SimulationEvent.event_type == "navigation_arrived")
+        .order_by(SimulationEvent.id.desc())
+        .limit(1)
+    )
+    if event is None or event.data.get("log_phase") == "arrival" or _phase_logged(db, "arrival") or _log_exists_for_event(db, event.id):
+        return None
+    return event
+
+
 def _log_decision(
     db: Session,
     probe: Probe,
@@ -698,6 +715,8 @@ def _log_decision(
         return False, None
     if event.mission_time == 1:
         return True, "launch"
+    if event.data.get("route_phase") == "arrived" or event.data.get("navigation_phase") == "arrived":
+        return True, "arrival"
     if any(obs.type == "navigation" and "到着" in obs.value for obs in observations):
         return True, "arrival"
     if action.target_id == "sys-outer-terminus" and not _phase_logged(db, "outer_lighthouse_detected"):
@@ -1280,9 +1299,56 @@ async def run_step(db: Session, llm: LLMClient) -> tuple[SimulationAction, Simul
     return action, event, log, probe
 
 
+async def _log_pending_navigation_arrival(
+    db: Session,
+    llm: LLMClient,
+    probe: Probe,
+    event: SimulationEvent,
+    context: ActionContext,
+) -> tuple[SimulationAction, SimulationEvent, ExplorationLog, Probe, dict | None]:
+    destination_id = event.data.get("destination_id")
+    destination_name = event.data.get("destination_name") or destination_id or "目的地"
+    action = SimulationAction(
+        probe_id=probe.id,
+        proposed_action="move",
+        validated_action="move",
+        target_id=destination_id,
+        reason="到着済みの航行イベントをログへ確定します。",
+        status="accepted",
+        validation_message="",
+        raw_payload={"action": "move", "target_id": destination_id, "navigation_intent": "main_route"},
+    )
+    db.add(action)
+    db.flush()
+    event.action_id = action.id
+    event.data = {
+        **event.data,
+        "navigation_intent": "main_route",
+        "route_phase": "arrived",
+        "navigation_phase": "arrived",
+        "log_worthy": True,
+        "log_phase": "arrival",
+    }
+    observations = [ObservationFact(type="navigation", value=f"{destination_name}に到着", reliability=_sensor_reliability(probe))]
+    interpretations = [Interpretation(hypothesis="航行状態は到着済みとして確定している", confidence=0.86)]
+    snapshot = _snapshot_with_event_data(probe, event)
+    db.add(ProbeStateHistory(probe_id=probe.id, mission_time=probe.mission_time, snapshot=snapshot))
+    log = await _persist_log(db, llm, context, action, event, observations, interpretations)
+    route = _route_state(db, probe)
+    db.commit()
+    db.refresh(probe)
+    db.refresh(event)
+    db.refresh(action)
+    db.refresh(log)
+    return action, event, log, probe, route
+
+
 async def run_tick(db: Session, llm: LLMClient) -> tuple[SimulationAction, SimulationEvent, ExplorationLog | None, Probe, dict | None]:
     probe = ensure_probe(db)
     context = action_context(db, probe)
+    pending_arrival = _pending_navigation_arrival_event(db, probe)
+    if pending_arrival is not None:
+        return await _log_pending_navigation_arrival(db, llm, probe, pending_arrival, context)
     proposed, navigation_intent = _deterministic_cruise_action(db, probe, context)
     return await _execute_action(db, llm, proposed, navigation_intent, context, force_log=False)
 

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 const store = useMissionStore()
-onMounted(() => store.loadAll())
+onMounted(() => {
+  void store.refreshLogs()
+})
 </script>
 
 <template>
