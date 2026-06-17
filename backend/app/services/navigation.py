@@ -247,7 +247,7 @@ def _sync_probe_mission_text(probe: Probe, state: ProbeNavigationState) -> None:
         probe.current_mission = f"{state.destination_name}に到着。次の航路選定待ち。"
         return
     phase_label = PHASE_LABELS.get(state.phase, "航行")
-    probe.current_mission = f"{state.destination_name}へ向けて{phase_label}中。進行率 {state.progress * 100:.1f}%。"
+    probe.current_mission = f"{state.destination_name}へ向けて{phase_label}中。"
 
 
 def synchronize_navigation(

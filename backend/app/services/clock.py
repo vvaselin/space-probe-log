@@ -9,6 +9,7 @@ from app.schemas.domain import ClockState, SimulationClockUpdate, SimulationSett
 DEFAULT_TIME_SCALE = 500_000.0
 DEFAULT_TIME_SCALE_PRESETS = [1.0, 10_000.0, 100_000.0, 500_000.0]
 DEFAULT_OFFLINE_CAP_SECONDS = 86_400
+MAX_SIMULATION_DATETIME = datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC)
 
 
 def _aware(value: datetime) -> datetime:
@@ -17,6 +18,18 @@ def _aware(value: datetime) -> datetime:
 
 def mission_clock_text(value: datetime) -> str:
     return _aware(value).strftime("%Y/%m/%d %H:%M:%S UTC")
+
+
+def _advance_datetime_safely(value: datetime, real_seconds: float, time_scale: float) -> tuple[datetime, float, bool]:
+    current = _aware(value)
+    if current >= MAX_SIMULATION_DATETIME:
+        return MAX_SIMULATION_DATETIME, 0.0, True
+    scaled_seconds = max(0.0, real_seconds * max(time_scale, 0.0))
+    remaining_seconds = max(0.0, (MAX_SIMULATION_DATETIME - current).total_seconds())
+    if scaled_seconds >= remaining_seconds:
+        applied_real_seconds = remaining_seconds / time_scale if time_scale > 0 else 0.0
+        return MAX_SIMULATION_DATETIME, applied_real_seconds, True
+    return current + timedelta(seconds=scaled_seconds), real_seconds, False
 
 
 def ensure_simulation_settings(db: Session) -> SimulationSettings:
@@ -78,7 +91,13 @@ def advance_simulation_clock(db: Session, *, real_now: datetime | None = None) -
             applied_real_seconds = 0.0
         else:
             applied_real_seconds = min(real_elapsed_seconds, float(settings.max_offline_elapsed_seconds))
-        clock.simulation_datetime = _aware(clock.simulation_datetime) + timedelta(seconds=applied_real_seconds * clock.time_scale)
+        clock.simulation_datetime, applied_real_seconds, reached_limit = _advance_datetime_safely(
+            clock.simulation_datetime,
+            applied_real_seconds,
+            clock.time_scale,
+        )
+        if reached_limit:
+            clock.clock_state = ClockState.paused.value
     else:
         applied_real_seconds = 0.0
     clock.last_real_datetime = now

@@ -90,13 +90,14 @@ def _physical_radius(point: tuple[float, float, float]) -> float:
     return math.sqrt(point[0] ** 2 + point[1] ** 2 + point[2] ** 2)
 
 
-def _physical_outward_score(probe: Probe, item: StarSystem) -> tuple[float, float]:
+def _physical_outward_score(probe: Probe, item: StarSystem) -> tuple[float, float, float]:
     probe_vector = (probe.x, probe.y, probe.z)
     item_vector = (item.x, item.y, item.z)
     probe_radius = max(_physical_radius(probe_vector), 1e-9)
     item_radius = _physical_radius(item_vector)
     dot = sum(left * right for left, right in zip(probe_vector, item_vector, strict=True)) / max(probe_radius * max(item_radius, 1e-9), 1e-9)
-    return item_radius, dot
+    forward_distance = sum((axis / probe_radius) * item_axis for axis, item_axis in zip(probe_vector, item_vector, strict=True))
+    return item_radius, dot, forward_distance
 
 
 def display_probe_offset(target: StarSystem) -> tuple[float, float, float]:
@@ -217,8 +218,8 @@ def ensure_frontier_targets(db: Session, probe: Probe, min_unvisited: int = 4) -
         for item in known_systems
         if item.id != probe.current_system_id
         and item.id not in visited
-        and _physical_outward_score(probe, item)[0] >= probe_radius + 0.5
-        and _physical_outward_score(probe, item)[1] > 0.05
+        and _physical_outward_score(probe, item)[2] >= probe_radius + 0.5
+        and _physical_outward_score(probe, item)[1] > 0.72
     ]
     if len(available) >= min_unvisited:
         return
@@ -242,8 +243,8 @@ def ensure_frontier_targets(db: Session, probe: Probe, min_unvisited: int = 4) -
             for item in known_systems
             if item.id != probe.current_system_id
             and item.id not in visited
-            and _physical_outward_score(probe, item)[0] >= probe_radius + 0.5
-            and _physical_outward_score(probe, item)[1] > 0.05
+            and _physical_outward_score(probe, item)[2] >= probe_radius + 0.5
+            and _physical_outward_score(probe, item)[1] > 0.72
         ]
         next_ring += 1
         base_radius += 1.5
@@ -261,11 +262,11 @@ def _visited_system_ids(db: Session, probe: Probe) -> set[str]:
 
 def _navigation_score(probe: Probe, item: StarSystem, visited: set[str]) -> tuple[int, int, int, float, str]:
     probe_radius = _physical_radius((probe.x, probe.y, probe.z))
-    item_radius, outward_alignment = _physical_outward_score(probe, item)
-    outward_penalty = 0 if item_radius >= probe_radius + 0.5 and outward_alignment > 0.05 else 1
+    item_radius, outward_alignment, forward_distance = _physical_outward_score(probe, item)
+    outward_penalty = 0 if forward_distance >= probe_radius + 0.5 and outward_alignment > 0.72 else 1
     visited_penalty = 1 if item.id in visited else 0
     order = int(item.details.get("navigation_order", 50))
-    outward_distance = max(0.0, item_radius - probe_radius)
+    outward_distance = max(0.0, forward_distance - probe_radius)
     return (visited_penalty, outward_penalty, order, -outward_distance, item.id)
 
 
@@ -314,6 +315,8 @@ def action_context(db: Session, probe: Probe) -> ActionContext:
             "object_role": item.details.get("object_role", "system"),
             "navigation_order": item.details.get("navigation_order", 50),
             "distance_from_origin": _display_radius((item.display_x, item.display_y, item.display_z)),
+            "outward_alignment": _physical_outward_score(probe, item)[1],
+            "outward_projection_pc": _physical_outward_score(probe, item)[2],
         }
         for item in navigation_systems
     ]
@@ -428,17 +431,23 @@ def _wait_streak(db: Session, probe: Probe) -> int:
 
 
 def _main_route_target(context: ActionContext) -> dict | None:
-    probe_radius = _display_radius_from_mapping({"display": [context.probe["display_x"], context.probe["display_y"], context.probe["display_z"]]})
+    probe_radius = _physical_radius((float(context.probe["x"]), float(context.probe["y"]), float(context.probe["z"])))
+    far_objectives = [
+        target
+        for target in context.navigation_targets
+        if not target.get("visited") and target.get("object_role") == MAIN_BEACON_ROLE
+    ]
+    if far_objectives:
+        return sorted(far_objectives, key=lambda item: item.get("distance_from_origin", 0))[0]
     candidates = [
         target
         for target in context.navigation_targets
-        if not target.get("visited") and target.get("distance_from_origin", 0) >= probe_radius + 0.5
+        if not target.get("visited")
+        and target.get("outward_projection_pc", 0) >= probe_radius + 0.5
+        and target.get("outward_alignment", 0) > 0.72
     ]
     if not candidates:
         candidates = [target for target in context.navigation_targets if not target.get("visited")]
-    far_objectives = [target for target in candidates if target.get("object_role") == MAIN_BEACON_ROLE]
-    if far_objectives:
-        return sorted(far_objectives, key=lambda item: item.get("distance_from_origin", 0))[0]
     frontier = [target for target in candidates if target.get("object_role") == "frontier_system"]
     if frontier:
         return sorted(frontier, key=lambda item: item.get("distance_from_origin", 0))[0]
@@ -951,7 +960,7 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
                 "decelerating": "減速",
                 "system_arrival": "到着処理",
             }.get(nav_state.phase, "航行")
-            summary = f"{target.name}へ向けて{phase_label}中。進行率 {nav_state.progress * 100:.1f}%。"
+            summary = f"{target.name}へ向けて{phase_label}中。"
             observations.append(ObservationFact(type="navigation", value=f"{target.name}へ向けた航行を継続", reliability=reliability))
         if route_state:
             passive_observations, passive_interpretations = passive_observations_during_move(

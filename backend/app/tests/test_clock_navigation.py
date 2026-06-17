@@ -72,6 +72,19 @@ def test_offline_cap_limits_real_elapsed(db) -> None:
     assert clock.simulation_datetime == datetime(2080, 5, 2, 18, 0, tzinfo=UTC)
 
 
+def test_large_time_scale_clamps_instead_of_overflowing(db) -> None:
+    clock = reset_simulation_clock(db, real_now=datetime(2026, 1, 1, tzinfo=UTC))
+    clock.simulation_datetime = datetime(9999, 12, 31, 23, 59, 58, tzinfo=UTC)
+    clock.time_scale = 5_000_000
+    clock.last_real_datetime = datetime(2026, 1, 1, tzinfo=UTC)
+
+    advanced, applied = advance_simulation_clock(db, real_now=datetime(2026, 1, 1, 0, 1, tzinfo=UTC))
+
+    assert advanced.simulation_datetime == datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC)
+    assert advanced.clock_state == ClockState.paused.value
+    assert applied == pytest.approx(1 / 5_000_000)
+
+
 def test_default_time_scale_presets_include_realtime(db) -> None:
     settings = ensure_simulation_settings(db)
 

@@ -27,6 +27,7 @@ const route = computed(() => store.navigation ?? store.probe?.navigation ?? null
 const missionClock = computed(() => store.clock?.mission_clock ?? store.probe?.mission_clock ?? '2080/05/02 12:00:00 UTC')
 const selectedLogBody = computed(() => renderMarkdown(selectedLog.value?.body_markdown ?? ''))
 const isCruisePaused = computed(() => store.clock?.clock_state !== 'running')
+const routeProgressPercent = computed(() => Math.max(0, Math.min(100, Math.round(route.value?.progress_percent ?? 0))))
 
 function logClock(log: LogListItem | LogDetail) {
   const clock = log.probe_position?.mission_clock
@@ -146,10 +147,10 @@ function renderMarkdown(markdown: string) {
         <span>{{ route?.destination_name ?? '航路未設定' }}</span>
         <strong>{{ phaseLabel }}</strong>
         <small>速度 {{ (route?.current_speed_km_s ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 }) }} km/s / {{ route?.drive_mode ?? 'conventional' }}</small>
-        <small>残距離 {{ (route?.remaining_distance_pc ?? 0).toFixed(4) }} pc / 進捗 {{ Math.round(route?.progress_percent ?? 0) }}%</small>
+        <small>残距離 {{ (route?.remaining_distance_pc ?? 0).toFixed(4) }} pc / 進捗 {{ routeProgressPercent }}%</small>
         <small v-if="route?.eta_datetime">ETA {{ new Date(route.eta_datetime).toISOString().replace('T', ' ').slice(0, 16) }} UTC</small>
         <div class="hud-route-bar">
-          <span :style="{ width: `${Math.round(route?.progress_percent ?? 0)}%` }" />
+          <span :style="{ width: `${routeProgressPercent}%` }" />
         </div>
       </div>
       <p v-if="store.lastEvent" class="hud-last-event">{{ store.lastEvent.summary }}</p>

@@ -17,7 +17,7 @@ export const useMissionStore = defineStore('mission', () => {
   const lastStep = ref<SimulationStep | null>(null)
   const lastTick = ref<SimulationTick | null>(null)
   const cruiseRunning = ref(false)
-  const tickTimer = ref<ReturnType<typeof setInterval> | null>(null)
+  const tickTimer = ref<ReturnType<typeof setTimeout> | null>(null)
   const navigationSyncTimer = ref<ReturnType<typeof setInterval> | null>(null)
   const lastEvent = ref<SimulationTick['event'] | null>(null)
   const latestGeneratedLog = ref<LogListItem | null>(null)
@@ -192,9 +192,19 @@ export const useMissionStore = defineStore('mission', () => {
   function stopCruiseTimer() {
     cruiseRunning.value = false
     if (tickTimer.value) {
-      clearInterval(tickTimer.value)
+      clearTimeout(tickTimer.value)
       tickTimer.value = null
     }
+  }
+
+  function scheduleCruiseTick() {
+    if (!cruiseRunning.value || tickTimer.value) return
+    tickTimer.value = setTimeout(async () => {
+      tickTimer.value = null
+      if (!cruiseRunning.value) return
+      await runTick()
+      scheduleCruiseTick()
+    }, 1800)
   }
 
   async function startCruise() {
@@ -209,10 +219,8 @@ export const useMissionStore = defineStore('mission', () => {
       const updatedClock = await api.updateClock({ time_scale: timeScale, clock_state: 'running' })
       applyClockSnapshot(updatedClock)
       if (hasActiveNavigation()) await syncNavigationState()
-      void runTick()
-      tickTimer.value = setInterval(() => {
-        void runTick()
-      }, 1800)
+      await runTick()
+      scheduleCruiseTick()
     } catch (err) {
       stopCruiseTimer()
       error.value = err instanceof Error ? err.message : 'API error'

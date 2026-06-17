@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,7 +12,7 @@ from app.schemas.domain import ProposedAction
 from app.services.action_validation import validate_action
 from app.services.navigation import begin_navigation, synchronize_navigation
 from app.services.reset import reset_world
-from app.services.simulation import _display_radius, apply_action, run_step, run_tick
+from app.services.simulation import _display_radius, _main_route_target, apply_action, run_step, run_tick
 
 
 class InvalidTargetLLMClient(MockLLMClient):
@@ -256,6 +257,35 @@ def test_far_objective_uses_outer_lighthouse_name(db) -> None:
     assert objective is not None
     assert objective.name == "外縁灯台"
     assert "白端航路標" not in objective.name
+
+
+def test_main_route_prefers_forward_outward_target_over_side_target(db) -> None:
+    context = SimpleNamespace(
+        probe={"x": 2.0, "y": 0.0, "z": 0.0},
+        navigation_targets=[
+            {
+                "id": "side-outward",
+                "visited": False,
+                "object_role": "frontier_system",
+                "distance_from_origin": 9.0,
+                "outward_projection_pc": 0.0,
+                "outward_alignment": 0.0,
+            },
+            {
+                "id": "forward-outward",
+                "visited": False,
+                "object_role": "frontier_system",
+                "distance_from_origin": 4.0,
+                "outward_projection_pc": 4.0,
+                "outward_alignment": 0.99,
+            },
+        ],
+    )
+
+    target = _main_route_target(context)
+
+    assert target is not None
+    assert target["id"] == "forward-outward"
 
 
 @pytest.mark.asyncio
