@@ -39,8 +39,8 @@ export function useProbeFollowCamera(camera: THREE.PerspectiveCamera, controls: 
       return
     }
     if (!enabled) return
-    const probeDelta = probePosition.clone().sub(lastProbePosition)
-    camera.position.add(probeDelta)
+    const targetDelta = probePosition.clone().sub(controls.target)
+    camera.position.add(targetDelta)
     controls.target.copy(probePosition)
     lastProbePosition.copy(probePosition)
   }

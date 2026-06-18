@@ -43,7 +43,7 @@ def signal_by_id(db: Session, signal_id: str) -> Signal | None:
 
 
 def logs(db: Session) -> list[ExplorationLog]:
-    return list(db.scalars(select(ExplorationLog).order_by(ExplorationLog.mission_time.desc())).all())
+    return list(db.scalars(select(ExplorationLog).order_by(ExplorationLog.mission_time.desc(), ExplorationLog.id.desc())).all())
 
 
 def log_by_id(db: Session, log_id: int) -> ExplorationLog | None:

@@ -97,7 +97,7 @@ onMounted(async () => {
     <div v-if="error" class="error">{{ error }}</div>
     <article v-if="log" class="log-detail-layout">
       <section class="panel log-detail-main">
-        <p class="muted">{{ logClock() }} / {{ log.communication_status }} / ??? {{ log.reliability.toFixed(2) }}</p>
+        <p class="muted">{{ logClock() }} / {{ log.communication_status }} / 信頼度 {{ log.reliability.toFixed(2) }}</p>
         <h1>{{ log.title }}</h1>
         <p>{{ log.summary }}</p>
         <div class="log-body log-body--rendered" v-html="renderedBody" />
@@ -120,7 +120,7 @@ onMounted(async () => {
           <h2>状態スナップショット</h2>
           <div class="snapshot-meta">
             <span>現在地: {{ textValue('current_system_id') }}</span>
-            <span>??: {{ logClock() }}</span>
+            <span>記録時刻: {{ logClock() }}</span>
           </div>
           <div class="snapshot-bars">
             <StatusBar label="エネルギー" :value="numberValue('energy')" />

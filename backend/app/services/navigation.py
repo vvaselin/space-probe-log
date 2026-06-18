@@ -17,6 +17,11 @@ SYSTEM_ARRIVAL_SECONDS = 5 * 60
 MIN_ACCELERATION_SECONDS = 5 * 60
 MAX_ACCELERATION_SECONDS = 30 * 60
 DRIVE_PROFILE = "instant_high_output_v1"
+NAVIGATION_LOG_MILESTONES = (
+    (0.01, "progress_01", "出発後の加速記録"),
+    (0.50, "progress_50", "航路中間域の定期観測"),
+    (0.99, "progress_99", "到着前の減速記録"),
+)
 
 PHASE_LABELS = {
     NavigationPhase.system_departure.value: "恒星系離脱",
@@ -229,6 +234,76 @@ def _travel_distance_fraction(state: ProbeNavigationState, elapsed_seconds: floa
     return max(0.0, min(1.0, travelled / total_motion_distance))
 
 
+def navigation_milestone_sample(state: ProbeNavigationState, progress: float) -> dict:
+    _sync_navigation_spec(state)
+    schedule = state.schedule or {}
+    lower = 0.0
+    upper = float(schedule.get("arrival_end_s", SYSTEM_ARRIVAL_SECONDS))
+    for _ in range(64):
+        midpoint = (lower + upper) / 2
+        if _travel_distance_fraction(state, midpoint) < progress:
+            lower = midpoint
+        else:
+            upper = midpoint
+    elapsed_seconds = upper
+    sampled_at = _aware(state.started_at) + timedelta(seconds=elapsed_seconds)
+    phase, drive_mode, speed_m_s = _phase_for_elapsed(state, elapsed_seconds)
+    physical_start = _vector_from_payload(schedule.get("origin_position_pc"), (0.0, 0.0, 0.0))
+    physical_target = _vector_from_payload(schedule.get("destination_position_pc"), physical_start)
+    display_start = _vector_from_payload(schedule.get("origin_display_position"), (0.0, 0.0, 0.0))
+    display_target = _vector_from_payload(schedule.get("destination_display_position"), display_start)
+    physical_position = tuple(_lerp(start, target, progress) for start, target in zip(physical_start, physical_target, strict=True))
+    display_position = tuple(_lerp(start, target, progress) for start, target in zip(display_start, display_target, strict=True))
+    display_distance = _distance(display_start, display_target)
+    return {
+        "sampled_at": sampled_at.isoformat().replace("+00:00", "Z"),
+        "sim_timestamp": sampled_at.isoformat().replace("+00:00", "Z"),
+        "simulation_datetime": sampled_at.isoformat().replace("+00:00", "Z"),
+        "mission_clock": mission_clock_text(sampled_at),
+        "progress": progress,
+        "progress_percent": progress * 100,
+        "navigation_phase": phase.value,
+        "route_phase": phase.value,
+        "drive_mode": drive_mode.value,
+        "current_speed_m_s": min(speed_m_s, state.max_speed_m_s),
+        "remaining_distance_km": state.total_distance_km * (1 - progress),
+        "remaining_distance_pc": state.total_distance_pc * (1 - progress),
+        "remaining_distance": display_distance * (1 - progress),
+        "physical_position": {"x": physical_position[0], "y": physical_position[1], "z": physical_position[2]},
+        "display_position": {"x": display_position[0], "y": display_position[1], "z": display_position[2]},
+    }
+
+
+def _record_navigation_milestone_events(db: Session, probe: Probe, state: ProbeNavigationState) -> None:
+    event_keys = list(state.event_keys or [])
+    for progress, phase_key, label in NAVIGATION_LOG_MILESTONES:
+        full_key = f"navigation:{state.id}:log:{phase_key}"
+        if state.progress < progress or full_key in event_keys:
+            continue
+        sample = navigation_milestone_sample(state, progress)
+        event_keys.append(full_key)
+        db.add(
+            SimulationEvent(
+                probe_id=probe.id,
+                event_type="navigation_progress",
+                mission_time=probe.mission_time,
+                summary=f"{state.destination_name}への航路。{label}。",
+                data={
+                    **sample,
+                    "event_key": full_key,
+                    "navigation_state_id": state.id,
+                    "log_phase": phase_key,
+                    "log_worthy": True,
+                    "origin_system_id": state.origin_system_id,
+                    "destination_id": state.destination_system_id,
+                    "destination_name": state.destination_name,
+                    "eta_datetime": _aware(state.eta_datetime).isoformat().replace("+00:00", "Z"),
+                },
+            )
+        )
+    state.event_keys = event_keys
+
+
 def navigation_display_velocity(
     state: ProbeNavigationState,
     display_start: tuple[float, float, float],
@@ -276,6 +351,7 @@ def synchronize_navigation(
             probe.current_system_id = target.id
         probe.target_id = None
         probe.velocity = 0.0
+        _record_navigation_milestone_events(db, probe, state)
         _sync_probe_mission_text(probe, state)
         state.updated_at = utcnow()
         db.flush()
@@ -329,6 +405,7 @@ def synchronize_navigation(
     else:
         probe.target_id = state.destination_system_id
         _sync_probe_mission_text(probe, state)
+    _record_navigation_milestone_events(db, probe, state)
     db.flush()
     return state
 

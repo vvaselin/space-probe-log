@@ -763,49 +763,6 @@ def _environment_name(rng: random.Random, object_type: str, slot: int) -> str:
     return f"{prefix}-{slot + 1:02d}-{rng.randint(100, 999)}"
 
 
-def outer_terminus(world_seed: str) -> SystemSpec:
-    seed = stable_seed(world_seed, "outer-terminus")
-    return SystemSpec(
-        id="sys-outer-terminus",
-        name="白端航路標",
-        position=(14.0, 7.0, -4.0),
-        display=(185.0, 92.0, -58.0),
-        generated_seed=str(seed),
-        has_life=False,
-        resources={"unknown_reflective_ice": 4.0},
-        details={
-            "star": {"name": "白端航路標", "spectral_type": "A", "fictional": True},
-            "object_role": "far_objective",
-            "navigation_order": 99,
-            "description": "地球圏から見て外縁方向に置かれた、白く強い航路目標",
-        },
-        bodies=[
-            BodySpec(
-                id="outer-terminus-star",
-                name="白端航路標 主星",
-                body_type="star",
-                orbit_radius_km=None,
-                radius_km=1_100_000,
-                sim=(14.0, 7.0, -4.0),
-                display=(185.0, 92.0, -58.0),
-                display_radius=2.2,
-                details={"spectral_type": "A", "fictional": True},
-            )
-        ],
-        signals=[
-            SignalSpec(
-                id="signal-outer-terminus-1",
-                kind="distant_navigation_pulse",
-                strength=0.38,
-                position=(14.0, 7.0, -4.0),
-                display=(185.0, 94.0, -58.0),
-                body_id="outer-terminus-star",
-                details={"frequency": "0.72GHz", "periodic": True},
-            )
-        ],
-    )
-
-
 def solar_system() -> SystemSpec:
     cached = real_solar_system()
     if cached is not None:
@@ -942,20 +899,6 @@ def solar_system() -> SystemSpec:
     return _manual_solar_system()
 
 
-def _seeded_waypoints(world_seed: str) -> list[SystemSpec]:
-    waypoint_defs = [
-        ("outer-solar-marker", "白端航路標", (1.9, -0.28, 0.22), 1),
-        ("heliopause-gate", "ヘリオポーズ境界", (3.2, 0.42, -0.36), 2),
-        ("interstellar-corridor", "星間回廊入口", (5.1, 0.9, 0.72), 3),
-    ]
-    waypoints: list[SystemSpec] = []
-    for waypoint_id, name, local, order in waypoint_defs:
-        position = _orient_local(world_seed, local[0], local[1], local[2])
-        display = (position[0] * 18, position[1] * 18, position[2] * 18)
-        waypoints.append(navigation_waypoint(waypoint_id, name, position, display, order))
-    return waypoints
-
-
 def _seeded_nearby_coordinates(world_seed: str) -> list[tuple[float, float, float]]:
     local_points = [
         (3.3, 2.4, -2.1),
@@ -963,53 +906,6 @@ def _seeded_nearby_coordinates(world_seed: str) -> list[tuple[float, float, floa
         (6.1, 1.4, 4.3),
     ]
     return [_orient_local(world_seed, radial, lateral, vertical) for radial, lateral, vertical in local_points]
-
-
-def _seeded_outer_terminus(world_seed: str) -> SystemSpec:
-    seed = stable_seed(world_seed, "outer-terminus")
-    position = _orient_local(world_seed, 14.0, -4.0, 7.0)
-    display = (position[0] * 18, position[1] * 18, position[2] * 18)
-    return SystemSpec(
-        id="sys-outer-terminus",
-        name="白端航路終点",
-        position=position,
-        display=display,
-        generated_seed=str(seed),
-        has_life=False,
-        resources={"unknown_reflective_ice": 4.0},
-        details={
-            "star": {"name": "白端航路終点", "spectral_type": "A", "fictional": True},
-            "object_role": "far_objective",
-            "navigation_order": 99,
-            "description": "外向き主航路の長距離ビーコンとして使われる遠方目標。",
-            "visual_data": {"texture_key": "star_blue_01", "emissive": "#dbeafe", "emission_strength": 1.2},
-            "fictional_data": {},
-        },
-        bodies=[
-            BodySpec(
-                id="outer-terminus-star",
-                name="白端航路終点 主星",
-                body_type="star",
-                orbit_radius_km=None,
-                radius_km=1_100_000,
-                sim=position,
-                display=display,
-                display_radius=2.2,
-                details={"spectral_type": "A", "fictional": True, "visual_data": {"texture_key": "star_blue_01"}},
-            )
-        ],
-        signals=[
-            SignalSpec(
-                id="signal-outer-terminus-1",
-                kind="distant_navigation_pulse",
-                strength=0.38,
-                position=position,
-                display=(display[0], display[1] + 2.0, display[2]),
-                body_id="outer-terminus-star",
-                details={"frequency": "0.72GHz", "periodic": True},
-            )
-        ],
-    )
 
 
 def _seeded_waypoints(world_seed: str) -> list[SystemSpec]:
@@ -1026,65 +922,7 @@ def _seeded_waypoints(world_seed: str) -> list[SystemSpec]:
     return waypoints
 
 
-def _seeded_outer_terminus(world_seed: str) -> SystemSpec:
-    seed = stable_seed(world_seed, "outer-terminus")
-    position = _orient_local(world_seed, 14.0, -4.0, 7.0)
-    display = (position[0] * 18, position[1] * 18, position[2] * 18)
-    return SystemSpec(
-        id="sys-outer-terminus",
-        name="外縁灯台",
-        position=position,
-        display=display,
-        generated_seed=str(seed),
-        has_life=False,
-        resources={"unknown_reflective_ice": 4.0},
-        details={
-            "star": {"name": "外縁灯台", "spectral_type": "A", "fictional": True},
-            "object_role": "far_objective",
-            "navigation_order": 99,
-            "description": "太陽系外縁の主航路ビーコンとして使われる遠方目標。",
-            "visual_data": {"texture_key": "star_blue_01", "emissive": "#dbeafe", "emission_strength": 1.2},
-            "fictional_data": {},
-        },
-        bodies=[
-            BodySpec(
-                id="outer-terminus-star",
-                name="外縁灯台 主星",
-                body_type="star",
-                orbit_radius_km=None,
-                radius_km=1_100_000,
-                sim=position,
-                display=display,
-                display_radius=2.2,
-                details={"spectral_type": "A", "fictional": True, "visual_data": {"texture_key": "star_blue_01"}},
-            )
-        ],
-        signals=[
-            SignalSpec(
-                id="signal-outer-terminus-1",
-                kind="distant_navigation_pulse",
-                strength=0.38,
-                position=position,
-                display=(display[0], display[1] + 2.0, display[2]),
-                body_id="outer-terminus-star",
-                details={"frequency": "0.72GHz", "periodic": True},
-            )
-        ],
-    )
-
-
-def generate_world(world_seed: str) -> list[SystemSpec]:
-    coordinates = [(3, 1, -2), (4, -2, 3), (6, 2, 1)]
-    nearby = [fictional_system(world_seed, i + 1, coord) for i, coord in enumerate(coordinates)]
-    waypoints = [
-        navigation_waypoint("outer-solar-marker", "外惑星航路標", (1.9, 0.22, -0.28), (26.0, 3.4, -5.2), 1),
-        navigation_waypoint("heliopause-gate", "ヘリオポーズ境界", (3.2, -0.48, 0.38), (46.0, -7.5, 7.2), 2),
-        navigation_waypoint("interstellar-corridor", "星間回廊入口", (5.1, 0.9, 0.72), (72.0, 15.5, 12.0), 3),
-    ]
-    return [solar_system(), *waypoints, *real_exoplanet_systems(), *nearby, outer_terminus(world_seed)]
-
-
 def generate_world(world_seed: str) -> list[SystemSpec]:
     nearby = [fictional_system(world_seed, i + 1, coord) for i, coord in enumerate(_seeded_nearby_coordinates(world_seed))]
     waypoints = _seeded_waypoints(world_seed)
-    return [solar_system(), *waypoints, *real_exoplanet_systems(), *nearby, _seeded_outer_terminus(world_seed)]
+    return [solar_system(), *waypoints, *real_exoplanet_systems(), *nearby]

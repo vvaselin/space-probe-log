@@ -15,10 +15,30 @@ from app.services.clock import (
     update_simulation_clock,
     update_simulation_settings,
 )
-from app.services.navigation import begin_navigation, navigation_payload, synchronize_navigation
+from app.services.navigation import begin_navigation, navigation_milestone_sample, navigation_payload, synchronize_navigation
 from app.services.probe_spec import probe_specification
 from app.services.reset import reset_world
 from app.services.simulation import ensure_frontier_targets
+
+
+def add_legacy_outer_lighthouse(db, probe) -> StarSystem:
+    objective = StarSystem(
+        id="sys-outer-terminus",
+        universe_id=probe.universe_id,
+        name="外縁灯台",
+        x=14.0,
+        y=-4.0,
+        z=7.0,
+        display_x=252.0,
+        display_y=-72.0,
+        display_z=126.0,
+        generated_seed="legacy-save",
+        resources={},
+        details={"object_role": "far_objective", "navigation_order": 99},
+    )
+    db.add(objective)
+    db.flush()
+    return objective
 
 
 def test_360x_advances_one_real_minute_to_six_sim_hours(db) -> None:
@@ -317,10 +337,44 @@ def test_piano_drive_is_not_used_inside_system_boundary(db) -> None:
     assert state.drive_mode == "piano_drive"
 
 
+def test_navigation_milestones_are_recorded_once_as_thresholds_are_crossed(db) -> None:
+    probe = reset_world(db, "milestone-crossings")
+    target = db.get(StarSystem, "outer-solar-marker")
+    state = begin_navigation(db, probe, target, datetime(2080, 5, 2, 12, tzinfo=UTC))
+
+    for expected_count, progress in enumerate((0.01, 0.50, 0.99), start=1):
+        sample = navigation_milestone_sample(state, progress)
+        sampled_at = datetime.fromisoformat(sample["sampled_at"].replace("Z", "+00:00")) + timedelta(seconds=1)
+        synchronize_navigation(db, probe, state, target, sampled_at)
+        events = db.query(SimulationEvent).filter(SimulationEvent.event_type == "navigation_progress").order_by(SimulationEvent.id).all()
+        assert len(events) == expected_count
+        assert events[-1].data["progress_percent"] == progress * 100
+
+    synchronize_navigation(db, probe, state, target, state.eta_datetime + timedelta(seconds=1))
+    events = db.query(SimulationEvent).filter(SimulationEvent.event_type == "navigation_progress").all()
+    assert len(events) == 3
+    assert len([key for key in state.event_keys if ":log:progress_" in key]) == 3
+
+
+def test_navigation_milestone_samples_interpolate_exact_route_values(db) -> None:
+    probe = reset_world(db, "milestone-values")
+    target = db.get(StarSystem, "outer-solar-marker")
+    state = begin_navigation(db, probe, target, datetime(2080, 5, 2, 12, tzinfo=UTC))
+    origin = state.schedule["origin_position_pc"]
+    destination = state.schedule["destination_position_pc"]
+
+    for progress in (0.01, 0.50, 0.99):
+        sample = navigation_milestone_sample(state, progress)
+        assert sample["progress"] == progress
+        assert sample["remaining_distance_pc"] == pytest.approx(state.total_distance_pc * (1 - progress))
+        assert sample["physical_position"]["x"] == pytest.approx(origin["x"] + (destination["x"] - origin["x"]) * progress)
+        assert sample["physical_position"]["y"] == pytest.approx(origin["y"] + (destination["y"] - origin["y"]) * progress)
+        assert sample["physical_position"]["z"] == pytest.approx(origin["z"] + (destination["z"] - origin["z"]) * progress)
+
+
 def test_frontier_after_outer_lighthouse_is_physically_outward(db) -> None:
     probe = reset_world(db, "outer-frontier")
-    objective = db.get(StarSystem, "sys-outer-terminus")
-    assert objective is not None
+    objective = add_legacy_outer_lighthouse(db, probe)
     probe.current_system_id = objective.id
     probe.x, probe.y, probe.z = objective.x, objective.y, objective.z
     probe.display_x, probe.display_y, probe.display_z = objective.display_x, objective.display_y, objective.display_z
@@ -339,6 +393,27 @@ def test_frontier_after_outer_lighthouse_is_physically_outward(db) -> None:
         dot = (probe.x * system.x + probe.y * system.y + probe.z * system.z) / (probe_radius * system_radius)
         assert system_radius > probe_radius
         assert dot > 0
+
+
+def test_legacy_far_objective_does_not_inflate_frontier_distance(db) -> None:
+    probe = reset_world(db, "legacy-distance")
+    objective = add_legacy_outer_lighthouse(db, probe)
+    marker = db.get(StarSystem, "outer-solar-marker")
+    assert marker is not None
+    probe.current_system_id = marker.id
+    probe.x, probe.y, probe.z = marker.x, marker.y, marker.z
+    probe.display_x, probe.display_y, probe.display_z = marker.display_x, marker.display_y, marker.display_z
+    for system in db.query(StarSystem).all():
+        if system.id != objective.id:
+            db.add(ProbeStateHistory(probe_id=probe.id, mission_time=probe.mission_time, snapshot={"current_system_id": system.id}))
+    db.commit()
+
+    ensure_frontier_targets(db, probe, min_unvisited=4)
+
+    objective_radius = math.sqrt(objective.x**2 + objective.y**2 + objective.z**2)
+    frontier = db.query(StarSystem).filter(StarSystem.id.like("frontier-%")).all()
+    assert len(frontier) >= 4
+    assert all(math.sqrt(system.x**2 + system.y**2 + system.z**2) < objective_radius for system in frontier)
 
 
 def test_old_probe_names_are_absent_from_primary_content() -> None:

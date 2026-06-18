@@ -50,7 +50,7 @@ from app.services.snapshots import probe_snapshot
 from app.world.generator import SystemSpec, frontier_shell_systems, stable_seed
 
 LAUNCH_TARGET_ID = "outer-solar-marker"
-MAIN_BEACON_ROLE = "far_objective"
+LEGACY_FAR_OBJECTIVE_ROLE = "far_objective"
 MAX_WAIT_STREAK = 1
 CRUISE_LOG_COOLDOWN = 5
 FUEL_LIMITS_ENABLED = False
@@ -218,6 +218,7 @@ def ensure_frontier_targets(db: Session, probe: Probe, min_unvisited: int = 4) -
         for item in known_systems
         if item.id != probe.current_system_id
         and item.id not in visited
+        and item.details.get("object_role") != LEGACY_FAR_OBJECTIVE_ROLE
         and _physical_outward_score(probe, item)[2] >= probe_radius + 0.5
         and _physical_outward_score(probe, item)[1] > 0.72
     ]
@@ -229,8 +230,7 @@ def ensure_frontier_targets(db: Session, probe: Probe, min_unvisited: int = 4) -
         if item.details.get("object_role") == "frontier_system"
     ]
     next_ring = max(frontier_rings, default=0) + 1
-    farthest_radius = max([probe_radius, *[_physical_radius((item.x, item.y, item.z)) for item in known_systems]])
-    base_radius = max(10.0, farthest_radius + 1.5)
+    base_radius = max(2.0, probe_radius + 0.5)
     outward_vector = (probe.x, probe.y, probe.z)
     shells_added = 0
     while len(available) < min_unvisited and shells_added < 8:
@@ -243,6 +243,7 @@ def ensure_frontier_targets(db: Session, probe: Probe, min_unvisited: int = 4) -
             for item in known_systems
             if item.id != probe.current_system_id
             and item.id not in visited
+            and item.details.get("object_role") != LEGACY_FAR_OBJECTIVE_ROLE
             and _physical_outward_score(probe, item)[2] >= probe_radius + 0.5
             and _physical_outward_score(probe, item)[1] > 0.72
         ]
@@ -286,7 +287,7 @@ def action_context(db: Session, probe: Probe) -> ActionContext:
             for signal in current.signals
             if not signal.investigated
         ]
-    if current and current.details.get("object_role") == MAIN_BEACON_ROLE:
+    if current and current.details.get("object_role") == LEGACY_FAR_OBJECTIVE_ROLE:
         visible_signals = []
     visited = _visited_system_ids(db, probe)
     all_systems = [item for item in systems(db) if item.discovered]
@@ -303,7 +304,11 @@ def action_context(db: Session, probe: Probe) -> ActionContext:
         }
         for item in all_systems
     ]
-    navigation_systems = [item for item in all_systems if item.id != probe.current_system_id]
+    navigation_systems = [
+        item
+        for item in all_systems
+        if item.id != probe.current_system_id and item.details.get("object_role") != LEGACY_FAR_OBJECTIVE_ROLE
+    ]
     navigation_systems.sort(key=lambda item: _navigation_score(probe, item, visited))
     navigation_targets = [
         {
@@ -432,13 +437,6 @@ def _wait_streak(db: Session, probe: Probe) -> int:
 
 def _main_route_target(context: ActionContext) -> dict | None:
     probe_radius = _physical_radius((float(context.probe["x"]), float(context.probe["y"]), float(context.probe["z"])))
-    far_objectives = [
-        target
-        for target in context.navigation_targets
-        if not target.get("visited") and target.get("object_role") == MAIN_BEACON_ROLE
-    ]
-    if far_objectives:
-        return sorted(far_objectives, key=lambda item: item.get("distance_from_origin", 0))[0]
     candidates = [
         target
         for target in context.navigation_targets
@@ -454,6 +452,11 @@ def _main_route_target(context: ActionContext) -> dict | None:
     return candidates[0] if candidates else _first_navigation_target(context)
 
 
+def main_route_target(db: Session, probe: Probe) -> StarSystem | None:
+    selected = _main_route_target(action_context(db, probe))
+    return system_detail(db, selected["id"]) if selected else None
+
+
 def _navigation_intent(action: ProposedAction, target: dict | None = None) -> str:
     if action.action == "investigate_signal":
         return "detour_signal"
@@ -461,8 +464,6 @@ def _navigation_intent(action: ProposedAction, target: dict | None = None) -> st
         return "survey"
     if action.action == "collect_resource":
         return "resource"
-    if action.action == "move" and target and target.get("object_role") == MAIN_BEACON_ROLE:
-        return "main_route"
     if action.action == "move":
         return "main_route"
     return "recovery"
@@ -477,7 +478,7 @@ def navigation_director(db: Session, probe: Probe, context: ActionContext, propo
 
     current = system_detail(db, probe.current_system_id)
     target = _main_route_target(context)
-    if current and current.details.get("object_role") == MAIN_BEACON_ROLE and target and probe.propulsion >= 25:
+    if current and current.details.get("object_role") == LEGACY_FAR_OBJECTIVE_ROLE and target and probe.propulsion >= 25:
         return (
             ProposedAction(
                 action="move",
@@ -728,8 +729,6 @@ def _log_decision(
         return True, "arrival"
     if any(obs.type == "navigation" and "到着" in obs.value for obs in observations):
         return True, "arrival"
-    if action.target_id == "sys-outer-terminus" and not _phase_logged(db, "outer_lighthouse_detected"):
-        return True, "outer_lighthouse_detected"
     if probe.hull < 35 or probe.communication < 35 or probe.energy < 10:
         return True, "serious_degradation"
     if _recent_log_exists(db, probe):
@@ -1116,17 +1115,10 @@ def _log_decision(
 ) -> tuple[bool, str | None]:
     if force_log:
         return True, "manual_step"
-    route_phase = event.data.get("route_phase")
-    if route_phase == "course_plotted":
-        return True, "course_plotted"
     if event.event_type in {"investigate_signal", "collect_resource", "observe"}:
         return True, event.event_type
     if action.validated_action != "move":
         return False, None
-    if route_phase == "arrived":
-        return True, "arrival"
-    if action.target_id == "sys-outer-terminus" and not _phase_logged(db, "outer_lighthouse_detected"):
-        return True, "outer_lighthouse_detected"
     if probe.hull < 35 or probe.communication < 35 or probe.energy < 10:
         return True, "serious_degradation"
     return False, None
@@ -1172,9 +1164,10 @@ async def _persist_log(
     event: SimulationEvent,
     observations: list[ObservationFact],
     interpretations: list[Interpretation],
+    snapshot_override: dict | None = None,
 ) -> ExplorationLog:
     probe = current_probe(db)
-    snapshot = _snapshot_with_event_data(probe, event)
+    snapshot = snapshot_override or _snapshot_with_event_data(probe, event)
     snapshot["log_number"] = db.query(ExplorationLog).count() + 1
     generated = await safe_generate_log(
         llm,
@@ -1185,6 +1178,8 @@ async def _persist_log(
                 "reason": action.reason,
                 "navigation_intent": action.raw_payload.get("navigation_intent"),
                 "route_phase": event.data.get("route_phase"),
+                "log_phase": event.data.get("log_phase"),
+                "progress_percent": event.data.get("progress_percent"),
                 "velocity": probe.velocity,
                 "navigation_phase": event.data.get("navigation_phase"),
                 "current_speed_m_s": event.data.get("current_speed_m_s"),
@@ -1205,6 +1200,8 @@ async def _persist_log(
                 "sim_elapsed_seconds": event.data.get("sim_elapsed_seconds"),
                 "simulation_datetime": event.data.get("simulation_datetime"),
                 "route_phase": event.data.get("route_phase"),
+                "log_phase": event.data.get("log_phase"),
+                "progress_percent": event.data.get("progress_percent"),
                 "velocity": probe.velocity,
                 "navigation_phase": event.data.get("navigation_phase"),
                 "current_speed_m_s": event.data.get("current_speed_m_s"),
@@ -1252,6 +1249,109 @@ async def _persist_log(
     return log
 
 
+def _pending_navigation_milestone_events(db: Session, probe: Probe) -> list[SimulationEvent]:
+    logged_event_ids = {
+        event_id
+        for related_event_ids in db.scalars(select(ExplorationLog.related_event_ids)).all()
+        for event_id in (related_event_ids or [])
+    }
+    events = db.scalars(
+        select(SimulationEvent)
+        .where(SimulationEvent.probe_id == probe.id, SimulationEvent.event_type == "navigation_progress")
+        .order_by(SimulationEvent.id)
+    ).all()
+    return [event for event in events if event.id not in logged_event_ids]
+
+
+def _milestone_snapshot(probe: Probe, event: SimulationEvent) -> dict:
+    snapshot = _snapshot_with_event_data(probe, event)
+    physical = event.data["physical_position"]
+    display = event.data["display_position"]
+    sampled_at = str(event.data["sampled_at"])
+    sampled_datetime = datetime.fromisoformat(sampled_at.replace("Z", "+00:00"))
+    snapshot.update(
+        {
+            "current_system_id": event.data.get("origin_system_id", probe.current_system_id),
+            "target_id": event.data.get("destination_id"),
+            "x": physical["x"],
+            "y": physical["y"],
+            "z": physical["z"],
+            "display_x": display["x"],
+            "display_y": display["y"],
+            "display_z": display["z"],
+            "velocity": event.data.get("current_speed_m_s", 0.0),
+            "current_mission": event.summary,
+            "mission_clock": event.data.get("mission_clock"),
+            "sim_timestamp": sampled_at,
+            "simulation_datetime": sampled_at,
+            "sim_elapsed_seconds": max(0, int((sampled_datetime - MISSION_START_AT).total_seconds())),
+            "navigation_phase": event.data.get("navigation_phase"),
+            "route_phase": event.data.get("route_phase"),
+            "progress_percent": event.data.get("progress_percent"),
+        }
+    )
+    return snapshot
+
+
+async def _persist_pending_navigation_milestones(
+    db: Session,
+    llm: LLMClient,
+    context: ActionContext,
+    probe: Probe,
+) -> list[ExplorationLog]:
+    logs: list[ExplorationLog] = []
+    for event in _pending_navigation_milestone_events(db, probe):
+        phase_text = {
+            "progress_01": "出発後の加速記録",
+            "progress_50": "航路中間域の定期観測",
+            "progress_99": "到着前の減速記録",
+        }.get(event.data.get("log_phase"), "航路上の定期観測")
+        action = SimulationAction(
+            probe_id=probe.id,
+            proposed_action="move",
+            validated_action="move",
+            target_id=event.data.get("destination_id"),
+            reason=f"{phase_text}を航行記録として保存します。",
+            status="accepted",
+            validation_message="",
+            raw_payload={
+                "action": "move",
+                "target_id": event.data.get("destination_id"),
+                "navigation_intent": "main_route",
+                "log_phase": event.data.get("log_phase"),
+            },
+        )
+        db.add(action)
+        db.flush()
+        event.action_id = action.id
+        observations = [
+            ObservationFact(
+                type="navigation",
+                value=f"{event.data.get('destination_name', '目的地')}への航路における{phase_text}",
+                reliability=_sensor_reliability(probe),
+            )
+        ]
+        interpretations = [Interpretation(hypothesis="航路計画どおりの進捗を維持している", confidence=0.9)]
+        event.data = {
+            **event.data,
+            "observations": [item.model_dump() for item in observations],
+            "interpretations": [item.model_dump() for item in interpretations],
+        }
+        logs.append(
+            await _persist_log(
+                db,
+                llm,
+                context,
+                action,
+                event,
+                observations,
+                interpretations,
+                snapshot_override=_milestone_snapshot(probe, event),
+            )
+        )
+    return logs
+
+
 async def _execute_action(
     db: Session,
     llm: LLMClient,
@@ -1281,7 +1381,8 @@ async def _execute_action(
     action.raw_payload = {**action.raw_payload, **{key: event.data[key] for key in event.data if key.startswith("route_") or key in {"speed_setting", "remaining_distance", "next_target_name"}}}
     snapshot = _snapshot_with_event_data(probe, event)
     db.add(ProbeStateHistory(probe_id=probe.id, mission_time=probe.mission_time, snapshot=snapshot))
-    log = None
+    milestone_logs = await _persist_pending_navigation_milestones(db, llm, context, probe)
+    log = milestone_logs[-1] if milestone_logs else None
     if log_worthy:
         log = await _persist_log(db, llm, context, action, event, observations, interpretations)
     route = event.data.get("route_state") or _route_state(db, probe)
@@ -1355,9 +1456,6 @@ async def _log_pending_navigation_arrival(
 async def run_tick(db: Session, llm: LLMClient) -> tuple[SimulationAction, SimulationEvent, ExplorationLog | None, Probe, dict | None]:
     probe = ensure_probe(db)
     context = action_context(db, probe)
-    pending_arrival = _pending_navigation_arrival_event(db, probe)
-    if pending_arrival is not None:
-        return await _log_pending_navigation_arrival(db, llm, probe, pending_arrival, context)
     proposed, navigation_intent = _deterministic_cruise_action(db, probe, context)
     return await _execute_action(db, llm, proposed, navigation_intent, context, force_log=False)
 

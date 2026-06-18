@@ -13,11 +13,10 @@ def test_different_seed_changes_fictional_systems() -> None:
     assert simplified("alpha")[1:] != simplified("beta")[1:]
 
 
-def test_world_includes_far_objective() -> None:
+def test_world_does_not_preseed_far_objective() -> None:
     world = generate_world("alpha")
-    objective = next(item for item in world if item.id == "sys-outer-terminus")
-    assert objective.details["object_role"] == "far_objective"
-    assert objective.display[0] > 100
+    assert all(item.id != "sys-outer-terminus" for item in world)
+    assert all(item.details.get("object_role") != "far_objective" for item in world)
 
 
 def test_world_includes_outward_navigation_waypoints() -> None:

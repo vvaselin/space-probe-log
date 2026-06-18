@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.llm.factory import get_llm_client
-from app.schemas.domain import LogListItem, ProbeRead, ResetRequest, SimulationClockRead, SimulationClockUpdate, SimulationStepResponse, SimulationTickResponse
+from app.schemas.domain import ClockState, LogListItem, ProbeRead, ResetRequest, SimulationClockRead, SimulationClockUpdate, SimulationStepResponse, SimulationTickResponse
 from app.api.serializers import probe_read
 from app.services.clock import advance_simulation_clock, clock_payload, reset_simulation_clock, update_simulation_clock
 from app.services.reset import reset_world
@@ -73,7 +73,7 @@ async def tick(db: Session = Depends(get_db)):
 @router.post("/reset", response_model=ProbeRead)
 def reset(payload: ResetRequest, db: Session = Depends(get_db)):
     probe = reset_world(db, payload.world_seed)
-    reset_simulation_clock(db)
+    reset_simulation_clock(db, clock_state=ClockState.paused)
     db.commit()
     return probe_read(db, probe)
 

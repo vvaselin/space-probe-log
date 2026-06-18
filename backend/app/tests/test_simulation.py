@@ -7,7 +7,7 @@ import pytest
 import app.services.clock as clock_service
 from app.llm.mock import MockLLMClient
 from app.models import Discovery, ExplorationLog, ProbeStateHistory, Signal, SimulationAction, SimulationEvent, StarSystem
-from app.repositories.read import system_detail
+from app.repositories.read import logs as read_logs, system_detail
 from app.schemas.domain import ProposedAction
 from app.services.action_validation import validate_action
 from app.services.navigation import begin_navigation, synchronize_navigation
@@ -23,6 +23,26 @@ class InvalidTargetLLMClient(MockLLMClient):
 class WaitLLMClient(MockLLMClient):
     async def propose_action(self, context):
         return ProposedAction(action="wait", reason="test wait")
+
+
+def add_legacy_outer_lighthouse(db, probe) -> StarSystem:
+    objective = StarSystem(
+        id="sys-outer-terminus",
+        universe_id=probe.universe_id,
+        name="外縁灯台",
+        x=14.0,
+        y=-4.0,
+        z=7.0,
+        display_x=252.0,
+        display_y=-72.0,
+        display_z=126.0,
+        generated_seed="legacy-save",
+        resources={},
+        details={"object_role": "far_objective", "navigation_order": 99},
+    )
+    db.add(objective)
+    db.flush()
+    return objective
 
 
 def test_move_allowed_when_fuel_is_low(db) -> None:
@@ -185,23 +205,21 @@ async def test_immediate_ticks_do_not_advance_user_visible_sim_time_or_position(
 
 
 @pytest.mark.asyncio
-async def test_tick_suppresses_ordinary_cruise_logs(db) -> None:
+async def test_tick_does_not_log_course_plotting_or_ordinary_cruise(db) -> None:
     reset_world(db)
     _, first_event, first_log, probe, first_route = await run_tick(db, MockLLMClient())
-    assert first_event.data["log_worthy"] is True
-    assert first_log is not None
+    assert first_event.data["log_worthy"] is False
+    assert first_log is None
     assert first_route is not None
     assert first_route["phase"] == "course_plotted"
     assert first_route["velocity"] == 0
-    assert first_log.body_markdown.count("2080/05/02 12:00:00 UTC") >= 1
-    assert all(token not in first_log.body_markdown for token in ["2024", "2026", "XX", "??"])
     _, second_event, second_log, probe, second_route = await run_tick(db, MockLLMClient())
     assert second_event.data["log_worthy"] is False
     assert second_log is None
     assert second_route is not None
     assert second_route["phase"] in {"accelerating", "interstellar_cruise", "decelerating", "system_arrival"}
     assert second_route["velocity"] > 0
-    assert db.query(ExplorationLog).count() == 1
+    assert db.query(ExplorationLog).count() == 0
 
 
 @pytest.mark.asyncio
@@ -240,23 +258,44 @@ async def test_tick_logs_arrival_that_was_finalized_by_navigation_sync(db) -> No
     assert state.phase == "arrived"
     assert db.query(ExplorationLog).count() == 0
 
+    arrival_event = db.query(SimulationEvent).filter(SimulationEvent.event_type == "navigation_arrived").one()
     _, event, log, probe, route = await run_tick(db, MockLLMClient())
 
-    assert event.event_type == "navigation_arrived"
-    assert event.data["log_phase"] == "arrival"
+    assert event.event_type == "move"
+    assert event.data["log_worthy"] is False
     assert log is not None
+    assert log.probe_state_snapshot["progress_percent"] == 99
     assert route is not None
-    assert route["phase"] == "arrived"
+    assert route["phase"] == "course_plotted"
     assert probe.current_system_id == "outer-solar-marker"
-    assert db.query(ExplorationLog).count() == 1
+    logs = db.query(ExplorationLog).order_by(ExplorationLog.id).all()
+    assert [item.probe_state_snapshot["progress_percent"] for item in logs] == [1, 50, 99]
+    assert [item.title for item in logs] == [
+        "INSOMNIA-07 出発後の加速記録",
+        "INSOMNIA-07 航路中間域の定期観測",
+        "INSOMNIA-07 到着前の減速記録",
+    ]
+    narrative_fields = [text for item in logs for text in (item.title, item.summary, item.body_markdown)]
+    assert all("%" not in text and "進捗" not in text for text in narrative_fields)
+    assert all(arrival_event.id not in item.related_event_ids for item in logs)
+    assert [item.probe_state_snapshot["progress_percent"] for item in read_logs(db)[:3]] == [99, 50, 1]
+    milestone_events = db.query(SimulationEvent).filter(SimulationEvent.event_type == "navigation_progress").all()
+    assert all(item.data["observations"] and item.data["interpretations"] for item in milestone_events)
+    milestone_text = [
+        text
+        for item in milestone_events
+        for text in (item.summary, item.data["observations"][0]["value"])
+    ]
+    milestone_actions = db.query(SimulationAction).filter(SimulationAction.id.in_([item.action_id for item in milestone_events])).all()
+    assert all("%" not in text and "進捗" not in text for text in [*milestone_text, *[item.reason for item in milestone_actions]])
+
+    await run_tick(db, MockLLMClient())
+    assert db.query(ExplorationLog).count() == 3
 
 
-def test_far_objective_uses_outer_lighthouse_name(db) -> None:
+def test_reset_world_does_not_create_outer_lighthouse(db) -> None:
     reset_world(db, "seed-a")
-    objective = db.get(StarSystem, "sys-outer-terminus")
-    assert objective is not None
-    assert objective.name == "外縁灯台"
-    assert "白端航路標" not in objective.name
+    assert db.get(StarSystem, "sys-outer-terminus") is None
 
 
 def test_main_route_prefers_forward_outward_target_over_side_target(db) -> None:
@@ -297,7 +336,7 @@ async def test_probe_moves_outward_after_signal_and_local_observation(db) -> Non
     await run_step(db, MockLLMClient())
     db.refresh(probe)
     assert probe.current_system_id in {"sol", "outer-solar-marker"}
-    assert probe.target_id in {None, "outer-solar-marker", "sys-outer-terminus"}
+    assert probe.target_id in {None, "outer-solar-marker"}
     assert (probe.display_x, probe.display_y, probe.display_z) != initial_display
 
 
@@ -327,7 +366,10 @@ async def test_observed_system_returns_to_main_route_instead_of_waiting(db) -> N
     db.commit()
     action, _, _, probe = await run_step(db, WaitLLMClient())
     assert action.validated_action == "move"
-    assert action.target_id == "sys-outer-terminus"
+    assert action.target_id != "sys-outer-terminus"
+    target = db.get(StarSystem, action.target_id)
+    assert target is not None
+    assert target.details.get("object_role") != "far_objective"
     assert action.raw_payload["navigation_intent"] == "main_route"
     assert probe.target_id == action.target_id
 
@@ -353,8 +395,7 @@ async def test_frontier_targets_are_added_after_initial_targets_are_consumed(db)
 @pytest.mark.asyncio
 async def test_outer_terminus_continues_to_outward_frontier(db) -> None:
     probe = reset_world(db)
-    objective = db.get(StarSystem, "sys-outer-terminus")
-    assert objective is not None
+    objective = add_legacy_outer_lighthouse(db, probe)
     probe.current_system_id = objective.id
     probe.target_id = None
     probe.x, probe.y, probe.z = objective.x, objective.y, objective.z

@@ -8,7 +8,6 @@ const logError = ref<string | null>(null)
 const followEnabled = ref(false)
 
 onMounted(() => store.loadAll())
-onBeforeUnmount(() => store.stopCruiseTimer())
 
 const mapKey = computed(() => {
   const map = store.map
@@ -28,6 +27,18 @@ const missionClock = computed(() => store.clock?.mission_clock ?? store.probe?.m
 const selectedLogBody = computed(() => renderMarkdown(selectedLog.value?.body_markdown ?? ''))
 const isCruisePaused = computed(() => store.clock?.clock_state !== 'running')
 const routeProgressPercent = computed(() => Math.max(0, Math.min(100, Math.round(route.value?.progress_percent ?? 0))))
+const displayPosition = computed(() => route.value?.display_position ?? store.map?.probe ?? null)
+const formattedPosition = computed(() => {
+  const position = displayPosition.value
+  if (!position) return null
+  return [position.x, position.y, position.z].map((value) => Number(value).toFixed(4)).join(', ')
+})
+const visibleLastEventSummary = computed(() => {
+  const summary = store.lastEvent?.summary?.trim()
+  if (!summary) return null
+  const normalize = (value: string) => value.replace(/[。．.\s]+$/g, '').replaceAll(/\s+/g, '')
+  return normalize(summary) === normalize(store.probe?.current_mission ?? '') ? null : summary
+})
 
 function logClock(log: LogListItem | LogDetail) {
   const clock = log.probe_position?.mission_clock
@@ -127,6 +138,7 @@ function renderMarkdown(markdown: string) {
           :payload="store.map"
           :paused="store.clock?.clock_state === 'paused'"
           :follow-enabled="followEnabled"
+          show-target-callout
           hide-toolbar
         />
       </ClientOnly>
@@ -136,12 +148,14 @@ function renderMarkdown(markdown: string) {
     <div v-if="store.error" class="hud-error">{{ store.error }}</div>
 
     <aside v-if="store.probe" class="hud-panel hud-panel--left">
-      <p class="hud-kicker">探査機</p>
-      <h1>{{ store.probe.name }}</h1>
-      <p class="hud-location">{{ missionClock }}</p>
-      <p class="muted">{{ store.probe.current_system_id }}</p>
-      <p v-if="store.probe.target_id" class="hud-target">航行中: {{ store.probe.target_id }}</p>
-      <p class="hud-mission">{{ store.probe.current_mission }}</p>
+      <section class="hud-identity">
+        <p class="hud-kicker">探査機</p>
+        <h1>{{ store.probe.name }}</h1>
+        <p class="hud-location">{{ missionClock }}</p>
+        <p class="muted">{{ store.probe.current_system_id }}</p>
+        <p v-if="store.probe.target_id" class="hud-target">航行中: {{ store.probe.target_id }}</p>
+        <p class="hud-mission">{{ store.probe.current_mission }}</p>
+      </section>
 
       <div class="hud-route">
         <span>{{ route?.destination_name ?? '航路未設定' }}</span>
@@ -153,7 +167,7 @@ function renderMarkdown(markdown: string) {
           <span :style="{ width: `${routeProgressPercent}%` }" />
         </div>
       </div>
-      <p v-if="store.lastEvent" class="hud-last-event">{{ store.lastEvent.summary }}</p>
+      <p v-if="visibleLastEventSummary" class="hud-last-event">{{ visibleLastEventSummary }}</p>
 
       <div class="hud-status-list">
         <StatusBar label="エネルギー" :value="store.probe.energy" />
@@ -167,7 +181,7 @@ function renderMarkdown(markdown: string) {
 
     <aside class="hud-panel hud-panel--right">
       <div class="hud-panel-head">
-        <h2>航行ログ</h2>
+        <h2><span>NAV</span> LOG</h2>
         <NuxtLink to="/logs" class="hud-link">一覧</NuxtLink>
       </div>
       <p v-if="logError" class="error">{{ logError }}</p>
@@ -193,6 +207,7 @@ function renderMarkdown(markdown: string) {
         {{ followEnabled ? '追尾解除' : '探査機を追尾' }}
       </button>
       <button :disabled="store.loading" class="button-secondary" @click="resetSimulation">リセット</button>
+      <span v-if="formattedPosition" class="hud-coordinates">LOC: {{ formattedPosition }}</span>
     </div>
 
     <section v-if="selectedLog" class="hud-log-float">

@@ -124,7 +124,12 @@ def update_simulation_clock(
     return clock, applied_seconds
 
 
-def reset_simulation_clock(db: Session, *, real_now: datetime | None = None) -> SimulationClock:
+def reset_simulation_clock(
+    db: Session,
+    *,
+    real_now: datetime | None = None,
+    clock_state: ClockState = ClockState.running,
+) -> SimulationClock:
     now = _aware(real_now or utcnow())
     settings = ensure_simulation_settings(db)
     clock = db.get(SimulationClock, 1)
@@ -133,7 +138,7 @@ def reset_simulation_clock(db: Session, *, real_now: datetime | None = None) -> 
         db.add(clock)
     clock.simulation_datetime = MISSION_START_AT
     clock.time_scale = settings.default_time_scale
-    clock.clock_state = ClockState.running.value
+    clock.clock_state = clock_state.value
     clock.last_real_datetime = now
     clock.updated_at = now
     db.flush()

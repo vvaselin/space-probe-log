@@ -13,12 +13,27 @@ const props = defineProps<{
   followEnabled?: boolean
   paused?: boolean
   hideToolbar?: boolean
+  showTargetCallout?: boolean
 }>()
 const selected = ref<string>('未選択')
 const localFollowEnabled = ref(false)
 const host = ref<HTMLDivElement | null>(null)
+const targetCallout = ref<HTMLDivElement | null>(null)
 let cleanup: (() => void) | null = null
 let setProbeFollow: ((enabled: boolean) => void) | null = null
+
+const targetCalloutData = computed(() => {
+  const navigation = props.payload.probe.navigation
+  const prediction = props.payload.route_prediction
+  const name = navigation?.destination_name ?? prediction?.target_name
+  if (!name) return null
+  return {
+    name,
+    distance: navigation ? `${navigation.remaining_distance_pc.toFixed(4)} pc` : '-',
+    eta: navigation?.eta_datetime ? navigation.eta_datetime.replace('T', ' ').slice(0, 10) : '-',
+    progress: navigation ? `${Math.round(navigation.progress_percent)}%` : '-',
+  }
+})
 type SpaceMapCameraView = {
   compact: boolean
   offset: { x: number; y: number; z: number }
@@ -45,6 +60,10 @@ function vectorFrom(point: { x: number; y: number; z: number }) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
+}
+
+function emissiveColor(value: unknown, fallback = '#ffd166') {
+  return new THREE.Color(typeof value === 'string' ? value : fallback)
 }
 
 function bodyVisualRadius(body: MapPayload['bodies'][number]) {
@@ -89,16 +108,10 @@ onMounted(() => {
   renderer.setSize(width, height)
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.75
+  renderer.toneMappingExposure = 1.15
   host.value.appendChild(renderer.domElement)
 
-  scene.add(new THREE.AmbientLight(0xd7e7ff, 0.76))
-  const keyLight = new THREE.DirectionalLight(0xffffff, 1.9)
-  keyLight.position.set(28, 40, 32)
-  scene.add(keyLight)
-  const fillLight = new THREE.PointLight(0xa8ddff, 1.35, 300)
-  fillLight.position.copy(focus.clone().add(new THREE.Vector3(0, 18, 24)))
-  scene.add(fillLight)
+  scene.add(new THREE.AmbientLight(0xb8c8e6, 0.16))
 
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
@@ -315,6 +328,70 @@ onMounted(() => {
     return point
   }
 
+  type StellarLightCandidate = { position: THREE.Vector3; color: THREE.Color; emissionStrength: number }
+  const stellarCandidates: StellarLightCandidate[] = []
+  const glowMaterials: THREE.SpriteMaterial[] = []
+  const glowCanvas = document.createElement('canvas')
+  glowCanvas.width = 128
+  glowCanvas.height = 128
+  const glowContext = glowCanvas.getContext('2d')
+  if (glowContext) {
+    const gradient = glowContext.createRadialGradient(64, 64, 0, 64, 64, 64)
+    gradient.addColorStop(0, 'rgba(255,255,255,1)')
+    gradient.addColorStop(0.16, 'rgba(255,255,255,0.88)')
+    gradient.addColorStop(0.48, 'rgba(255,255,255,0.2)')
+    gradient.addColorStop(1, 'rgba(255,255,255,0)')
+    glowContext.fillStyle = gradient
+    glowContext.fillRect(0, 0, 128, 128)
+  }
+  const glowTexture = new THREE.CanvasTexture(glowCanvas)
+  glowTexture.colorSpace = THREE.SRGBColorSpace
+  const addStellarGlow = (position: THREE.Vector3, colorValue: THREE.Color, radius: number, emissionStrength: number) => {
+    const material = new THREE.SpriteMaterial({
+      map: glowTexture,
+      color: colorValue,
+      transparent: true,
+      opacity: clamp(0.58 + emissionStrength * 0.12, 0.62, 0.92),
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    })
+    const sprite = new THREE.Sprite(material)
+    sprite.position.copy(position)
+    sprite.scale.setScalar(radius * clamp(5 + emissionStrength, 5.5, 8.5))
+    scene.add(sprite)
+    glowMaterials.push(material)
+    stellarCandidates.push({ position: position.clone(), color: colorValue.clone(), emissionStrength })
+  }
+  const stellarLightPool = Array.from({ length: 4 }, () => {
+    const light = new THREE.PointLight(0xffffff, 0, 220, 2)
+    scene.add(light)
+    return light
+  })
+  const lastLightTarget = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0)
+  const updateStellarLights = (force = false) => {
+    if (!force && lastLightTarget.distanceToSquared(controls.target) < 0.25) return
+    lastLightTarget.copy(controls.target)
+    const nearest = [...stellarCandidates]
+      .sort((left, right) => left.position.distanceToSquared(controls.target) - right.position.distanceToSquared(controls.target))
+      .slice(0, stellarLightPool.length)
+    stellarLightPool.forEach((light, index) => {
+      const candidate = nearest[index]
+      if (!candidate) {
+        light.intensity = 0
+        return
+      }
+      light.position.copy(candidate.position)
+      light.color.copy(candidate.color)
+      light.intensity = clamp(candidate.emissionStrength * 14, 10, 32)
+      light.distance = clamp(130 + candidate.emissionStrength * 45, 160, 280)
+    })
+  }
+
+  const systemsWithStellarBodies = new Set(
+    props.payload.bodies.filter((body) => body.type === 'star').map((body) => body.system_id),
+  )
+
   for (const system of props.payload.systems) {
     const isFarObjective = system.object_role === 'far_objective'
     const isWaypoint = system.object_role === 'navigation_waypoint'
@@ -325,7 +402,7 @@ onMounted(() => {
         ? farObjectiveMaterial
         : texturedStandardMaterial(system.visual_data?.texture_key, baseMaterial)
     if (material instanceof THREE.MeshStandardMaterial && system.visual_data?.emissive) {
-      material.emissive = new THREE.Color(system.visual_data.emissive)
+      material.emissive.copy(emissiveColor(system.visual_data.emissive))
     }
     const radius = isWaypoint ? 0.72 : isFarObjective ? 1.8 : system.id === 'sol' ? 1.45 : 1.05
     const geometry = isWaypoint ? new THREE.OctahedronGeometry(radius, 0) : new THREE.SphereGeometry(radius, 32, 20)
@@ -334,6 +411,15 @@ onMounted(() => {
     mesh.userData.label = `${system.name} (${system.id})`
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
+    if (!isWaypoint && !isFarObjective && !systemsWithStellarBodies.has(system.id)) {
+      const starColor = emissiveColor(system.visual_data?.emissive)
+      const emissionStrength = system.visual_data?.emission_strength ?? 1.25
+      if (material instanceof THREE.MeshStandardMaterial) {
+        material.emissive.copy(starColor)
+        material.emissiveIntensity = emissionStrength
+      }
+      addStellarGlow(mesh.position, starColor, radius, emissionStrength)
+    }
 
     const ringColor = isWaypoint ? 0xdbeafe : isFarObjective ? 0xffffff : system.has_life ? 0x6df2b2 : 0xffd166
     const ring = new THREE.Mesh(
@@ -359,7 +445,7 @@ onMounted(() => {
   for (const body of props.payload.bodies) {
     const bodyMaterial = texturedStandardMaterial(body.visual_data?.texture_key, bodyFallbackMaterial(body))
     if (body.visual_data?.emissive) {
-      bodyMaterial.emissive = new THREE.Color(body.visual_data.emissive)
+      bodyMaterial.emissive.copy(emissiveColor(body.visual_data.emissive))
     }
     if (typeof body.visual_data?.roughness === 'number') {
       bodyMaterial.roughness = body.visual_data.roughness
@@ -373,6 +459,14 @@ onMounted(() => {
     mesh.userData.label = `${body.name} / ${body.type}`
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
+    if (body.type === 'star') {
+      addStellarGlow(
+        mesh.position,
+        emissiveColor(body.visual_data?.emissive),
+        visualRadius,
+        body.visual_data?.emission_strength ?? 1.25,
+      )
+    }
     if (body.visual_data?.ring) {
       const ringVisual = body.visual_data.ring
       const ringTexture = loadTexture(pickTextureSet(ringVisual.texture_key)?.alpha ?? pickTextureSet(ringVisual.texture_key)?.albedo)
@@ -473,7 +567,6 @@ onMounted(() => {
   let routeLine: THREE.Line | null = null
   let dynamicRouteLine: THREE.Line | null = null
   let predictionLine: THREE.Line | null = null
-  let primaryPredictionLine: THREE.Line | null = null
   if (origin) {
     const originPoint = vectorFrom(origin)
     originLine = new THREE.Line(
@@ -495,21 +588,47 @@ onMounted(() => {
     disposeObjectMaterial(line)
     return null
   }
-  const routeGeometry = () => {
+  const segmentProgress = (point: THREE.Vector3, origin: THREE.Vector3, destination: THREE.Vector3) => {
+    const segment = destination.clone().sub(origin)
+    const lengthSq = segment.lengthSq()
+    if (lengthSq <= 1e-9) return 1
+    return point.clone().sub(origin).dot(segment) / lengthSq
+  }
+  const confirmedTrailPoints = () => {
     const points = props.payload.route.slice(0, -1).map((point) => new THREE.Vector3(point.x, point.y, point.z))
+    const navigation = props.payload.probe.navigation
+    if (!navigation?.active || !navigation.origin_display_position || !navigation.destination_display_position || !points.length) return points
+
+    const origin = vectorFrom(navigation.origin_display_position)
+    const destination = vectorFrom(navigation.destination_display_position)
+    const renderedProgress = segmentProgress(probeCurrentAnchor, origin, destination)
+    let originIndex = 0
+    let nearestOriginDistance = Number.POSITIVE_INFINITY
+    points.forEach((point, index) => {
+      const distance = point.distanceToSquared(origin)
+      if (distance <= nearestOriginDistance) {
+        nearestOriginDistance = distance
+        originIndex = index
+      }
+    })
+    return [
+      ...points.slice(0, originIndex + 1),
+      ...points.slice(originIndex + 1).filter((point) => segmentProgress(point, origin, destination) <= renderedProgress + 1e-6),
+    ]
+  }
+  const routeGeometry = (points = confirmedTrailPoints()) => {
     const routePoints = points.length >= 4 ? new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.35).getPoints(points.length * 10) : points
     return new THREE.BufferGeometry().setFromPoints(routePoints)
   }
   const lastConfirmedRoutePoint = () => {
-    const fixedRoute = props.payload.route.slice(0, -1)
-    const point = fixedRoute.at(-1) ?? props.payload.route[0]
-    return point ? new THREE.Vector3(point.x, point.y, point.z) : probeCurrentAnchor.clone()
+    return confirmedTrailPoints().at(-1) ?? probeCurrentAnchor.clone()
   }
   const syncRouteLine = () => {
-    if (props.payload.route.length < 3) {
+    const confirmedPoints = confirmedTrailPoints()
+    if (confirmedPoints.length < 2) {
       routeLine = removeLine(routeLine)
     } else {
-      const geometry = routeGeometry()
+      const geometry = routeGeometry(confirmedPoints)
       if (!routeLine) {
         routeLine = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x9fffe6, transparent: true, opacity: 0.72 }))
         scene.add(routeLine)
@@ -531,6 +650,11 @@ onMounted(() => {
     if (!dynamicRouteLine) return
     const positions = dynamicRouteLine.geometry.getAttribute('position') as THREE.BufferAttribute
     const start = lastConfirmedRoutePoint()
+    const previousStart = new THREE.Vector3(positions.getX(0), positions.getY(0), positions.getZ(0))
+    if (previousStart.distanceToSquared(start) > 1e-9) {
+      syncRouteLine()
+      return
+    }
     positions.setXYZ(0, start.x, start.y, start.z)
     positions.setXYZ(1, probeCurrentAnchor.x, probeCurrentAnchor.y, probeCurrentAnchor.z)
     positions.needsUpdate = true
@@ -559,7 +683,6 @@ onMounted(() => {
   }
   const syncPredictionLines = () => {
     predictionLine = syncPredictionLine(predictionLine, props.payload.route_prediction, { color: 0xdbeafe, opacity: 0.42, dashSize: 2.2, gapSize: 1.5 })
-    primaryPredictionLine = syncPredictionLine(primaryPredictionLine, props.payload.primary_route_prediction, { color: 0xf8fbff, opacity: 0.22, dashSize: 7.0, gapSize: 4.0 })
   }
   syncRouteLine()
   syncPredictionLines()
@@ -579,11 +702,31 @@ onMounted(() => {
 
   const resize = () => {
     if (!host.value) return
-    camera.aspect = host.value.clientWidth / host.value.clientHeight
+    const nextWidth = host.value.clientWidth
+    const nextHeight = host.value.clientHeight
+    if (nextWidth <= 0 || nextHeight <= 0) return
+    camera.aspect = nextWidth / nextHeight
     camera.updateProjectionMatrix()
-    renderer.setSize(host.value.clientWidth, host.value.clientHeight)
+    renderer.setSize(nextWidth, nextHeight)
   }
+  const resizeObserver = new ResizeObserver(resize)
+  resizeObserver.observe(host.value)
   window.addEventListener('resize', resize)
+  resize()
+
+  const updateTargetCallout = () => {
+    const element = targetCallout.value
+    const destination = props.payload.probe.navigation?.destination_display_position ?? props.payload.route_prediction?.to
+    if (!element || !props.showTargetCallout || !destination || !host.value) return
+    const projected = vectorFrom(destination).project(camera)
+    const x = (projected.x * 0.5 + 0.5) * host.value.clientWidth
+    const y = (-projected.y * 0.5 + 0.5) * host.value.clientHeight
+    const calloutFitsMap = x >= 5 && x + 310 <= host.value.clientWidth && y >= 84 && y + 26 <= host.value.clientHeight
+    const visible = projected.z >= -1 && projected.z <= 1 && calloutFitsMap
+    element.hidden = !visible
+    if (!visible) return
+    element.style.transform = `translate3d(${x}px, ${y}px, 0)`
+  }
 
   const stopProbeWatch = watch(
     () => [
@@ -614,13 +757,6 @@ onMounted(() => {
       props.payload.route_prediction?.to.x ?? 0,
       props.payload.route_prediction?.to.y ?? 0,
       props.payload.route_prediction?.to.z ?? 0,
-      props.payload.primary_route_prediction?.target_id ?? '',
-      props.payload.primary_route_prediction?.from.x ?? 0,
-      props.payload.primary_route_prediction?.from.y ?? 0,
-      props.payload.primary_route_prediction?.from.z ?? 0,
-      props.payload.primary_route_prediction?.to.x ?? 0,
-      props.payload.primary_route_prediction?.to.y ?? 0,
-      props.payload.primary_route_prediction?.to.z ?? 0,
     ].join(':'),
     syncPredictionLines,
     { flush: 'sync' },
@@ -632,7 +768,7 @@ onMounted(() => {
     if (followCamera.isEnabled() === enabled) return
     localFollowEnabled.value = enabled
     if (enabled) selected.value = props.payload.probe.name
-    followCamera.setEnabled(enabled, probeCurrentAnchor)
+    followCamera.setEnabled(enabled, probe.position)
   }
   if (props.followEnabled) setProbeFollow(true)
 
@@ -667,7 +803,7 @@ onMounted(() => {
       probe.rotation.y += 0.014
       probeMarker.rotation.z += 0.01
       updateDynamicRouteLine()
-      if (predictionLine || primaryPredictionLine) syncPredictionLines()
+      if (predictionLine) syncPredictionLines()
       if (originLine) {
         const positions = originLine.geometry.getAttribute('position') as THREE.BufferAttribute
         positions.setXYZ(1, probeCurrentAnchor.x, probeCurrentAnchor.y, probeCurrentAnchor.z)
@@ -678,7 +814,8 @@ onMounted(() => {
     const time = performance.now() * 0.001
     for (const material of cloudMaterials) material.uniforms.uTime.value = time
     for (const mesh of cloudMeshes) mesh.lookAt(camera.position)
-    if (!motionPaused) followCamera.update(probeCurrentAnchor)
+    controls.update()
+    followCamera.update(probe.position)
     const distance = camera.position.distanceTo(controls.target)
     starPoints.visible = distance > 8
     for (const entry of lodEntries) {
@@ -689,9 +826,11 @@ onMounted(() => {
       entry.point.visible = !isNear && !isTooFar
       if (entry.ring) entry.ring.visible = isNear && !isTooFar
     }
-    controls.update()
+    updateStellarLights()
+    updateTargetCallout()
     renderer.render(scene, camera)
   }
+  updateStellarLights(true)
   animate()
 
   cleanup = () => {
@@ -707,6 +846,13 @@ onMounted(() => {
     stopPredictionWatch()
     renderer.domElement.removeEventListener('click', click)
     window.removeEventListener('resize', resize)
+    resizeObserver.disconnect()
+    controls.dispose()
+    for (const light of stellarLightPool) scene.remove(light)
+    for (const material of glowMaterials) material.dispose()
+    glowTexture.dispose()
+    for (const texture of textureCache.values()) texture.dispose()
+    for (const material of cloudMaterials) material.dispose()
     renderer.dispose()
     starGeometry.dispose()
     for (const entry of lodEntries) {
@@ -718,7 +864,6 @@ onMounted(() => {
     removeLine(routeLine)
     removeLine(dynamicRouteLine)
     removeLine(predictionLine)
-    removeLine(primaryPredictionLine)
     host.value?.replaceChildren()
     setProbeFollow = null
   }
@@ -732,8 +877,20 @@ onBeforeUnmount(() => cleanup?.())
 </script>
 
 <template>
-  <div>
+  <div class="space-map-shell">
     <div ref="host" class="map-frame" :class="{ 'map-compact': compact }" />
+    <div v-if="showTargetCallout && targetCalloutData" ref="targetCallout" class="target-callout" hidden>
+      <span class="target-callout__marker" />
+      <span class="target-callout__leader" />
+      <div class="target-callout__body">
+        <strong>{{ targetCalloutData.name }}</strong>
+        <dl>
+          <dt>DIST</dt><dd>{{ targetCalloutData.distance }}</dd>
+          <dt>ETA</dt><dd>{{ targetCalloutData.eta }}</dd>
+          <dt>PROG</dt><dd>{{ targetCalloutData.progress }}</dd>
+        </dl>
+      </div>
+    </div>
     <div v-if="!hideToolbar" class="map-toolbar">
       <button type="button" :class="{ 'is-active': localFollowEnabled }" @click="setProbeFollow?.(!localFollowEnabled)">
         {{ localFollowEnabled ? '追尾解除' : '探査機を追尾' }}

@@ -10,7 +10,7 @@ from app.schemas.domain import MapPayload, SystemDetail, SystemRead
 from app.services.clock import advance_simulation_clock
 from app.services.navigation import latest_navigation_state, navigation_payload, synchronize_navigation
 from app.services.probe_spec import probe_specification
-from app.services.simulation import display_probe_offset, ensure_frontier_targets, ensure_probe
+from app.services.simulation import display_probe_offset, ensure_frontier_targets, ensure_probe, main_route_target
 from app.world.generator import generated_environment_objects, real_data_epoch, stable_seed
 
 router = APIRouter(prefix="/api/world", tags=["world"])
@@ -68,7 +68,7 @@ def get_map(db: Session = Depends(get_db)):
     signals = db.query(Signal).all()
     earth = next((body for body in bodies if body.id == "earth"), None)
     target = system_detail(db, probe.target_id) if probe.target_id else None
-    primary_target = next((item for item in all_systems if item.details.get("object_role") == "far_objective"), None)
+    primary_target = main_route_target(db, probe)
     latest_action = db.query(SimulationAction).order_by(SimulationAction.id.desc()).first()
     nav_payload = navigation_payload(probe, nav_state, clock.simulation_datetime)
     map_origin = {

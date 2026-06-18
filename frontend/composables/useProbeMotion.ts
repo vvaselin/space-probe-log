@@ -64,7 +64,6 @@ export function useProbeMotion(initialPayload: MapPayload) {
     const now = performance.now()
     const wasPaused = paused || snapshot.timeScale === 0
     const frozenPosition = renderedPosition.clone()
-    const previousPredictedPosition = authoritativePosition(now)
     const next = snapshotFromPayload(payload)
     const nextPaused = next.timeScale === 0
     if (wasPaused || nextPaused) {
@@ -92,7 +91,6 @@ export function useProbeMotion(initialPayload: MapPayload) {
     paused = false
     snapshot = {
       ...next,
-      position: next.active ? previousPredictedPosition : next.position,
       receivedAt: now,
     }
   }

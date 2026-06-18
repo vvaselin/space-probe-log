@@ -54,6 +54,13 @@ class MockLLMClient:
 
 
 def _title(context: LogContext) -> str:
+    log_phase = context.event.get("log_phase")
+    if log_phase == "progress_01":
+        return "出発後の加速記録"
+    if log_phase == "progress_50":
+        return "航路中間域の定期観測"
+    if log_phase == "progress_99":
+        return "到着前の減速記録"
     phase = context.event.get("route_phase") or context.action.get("route_phase")
     action = context.action["action"]
     if phase == "course_plotted":
@@ -73,6 +80,9 @@ def _title(context: LogContext) -> str:
 
 def _opening(context: LogContext) -> str:
     event = context.event
+    log_phase = event.get("log_phase")
+    if log_phase in {"progress_01", "progress_50", "progress_99"}:
+        return f"{event['summary']}\n\n位置、速度、残距離を同じ時刻面で固定した。窓外の星の流れと航路標の見え方も、この航行記録に残す。"
     phase = event.get("route_phase")
     if phase == "course_plotted":
         return f"{event['summary']}\n\n私はまだ動かない。航路線だけを先に引き、推進系の出力を零に保った。"
@@ -95,6 +105,10 @@ def _scenery(passive: list[ObservationFact], observations: list[ObservationFact]
 
 
 def _closing(context: LogContext) -> str:
+    if context.event.get("log_phase") == "progress_99":
+        return "目的地は到着判定の直前にある。減速曲線を保ったまま、最後の区間を進む。"
+    if context.event.get("log_phase") in {"progress_01", "progress_50"}:
+        return "この基準点を航路履歴へ固定し、次の定期報告地点まで同じ進路を維持する。"
     phase = context.event.get("route_phase")
     if phase == "course_plotted":
         return "停止したまま航路を保存することは、移動の一部だ。次のtickで、私はこの線に速度を与える。"

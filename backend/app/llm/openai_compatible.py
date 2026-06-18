@@ -64,6 +64,8 @@ class OpenAICompatibleLLMClient:
             "If route_phase is course_plotted, describe the route decision while the probe remains stopped. "
             "If route_phase is accelerating, cruising, or decelerating, describe gradual motion and the given velocity/remaining_distance. "
             "If route_phase is arrived, describe the arrival and zero velocity. "
+            "For progress_01, progress_50, and progress_99, never write a percentage or describe progress numerically. "
+            "Describe them as post-departure acceleration, a mid-route observation, or pre-arrival deceleration, focusing on distance, speed, remaining distance, and scenery. "
             "Observation facts may include sighting_level: detected, resolved, or confirmed. "
             "detected means the sensor only picked up a faint sign; narrate it as an unconfirmed sighting. "
             "resolved means it matches a known object and can be named. "

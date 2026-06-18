@@ -28,13 +28,17 @@ const selectedScale = computed({
 <template>
   <div class="shell">
     <nav class="nav">
-      <NuxtLink class="brand" to="/">INSOMNIA-07</NuxtLink>
-      <NuxtLink to="/logs">Logs</NuxtLink>
-      <NuxtLink to="/map">Map</NuxtLink>
-      <NuxtLink to="/probe">Probe</NuxtLink>
-      <NuxtLink to="/settings">Settings</NuxtLink>
+      <div class="nav__primary">
+        <NuxtLink class="brand" to="/">INSOMNIA-07</NuxtLink>
+        <div class="nav__links">
+          <NuxtLink to="/logs">Logs</NuxtLink>
+          <NuxtLink to="/map">Map</NuxtLink>
+          <NuxtLink to="/probe">Probe</NuxtLink>
+          <NuxtLink to="/settings">Settings</NuxtLink>
+        </div>
+      </div>
       <div class="sim-hud" :class="{ 'sim-hud--paused': store.clock?.clock_state === 'paused' }">
-        <span>SIM TIME {{ store.clock?.mission_clock ?? '2080/05/02 12:00:00 UTC' }}</span>
+        <span class="sim-hud__clock">SIM TIME {{ store.clock?.mission_clock ?? '2080/05/02 12:00:00 UTC' }}</span>
         <label>
           TIME
           <select v-model.number="selectedScale">
@@ -43,7 +47,7 @@ const selectedScale = computed({
             </option>
           </select>
         </label>
-        <strong>{{ store.clock?.clock_state === 'paused' ? 'PAUSED' : 'RUNNING' }}</strong>
+        <strong class="sim-hud__state">{{ store.clock?.clock_state === 'paused' ? 'PAUSED' : 'RUNNING' }}</strong>
       </div>
     </nav>
     <NuxtPage />

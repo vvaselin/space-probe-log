@@ -30,14 +30,16 @@ export const useMissionStore = defineStore('mission', () => {
     }
     if (map.value) {
       const displayPosition = navigationData.display_position
+      const navigationActive = navigationData.active && navigationData.phase !== 'arrived'
       map.value = {
         ...map.value,
+        route_prediction: navigationActive ? map.value.route_prediction : null,
         probe: {
           ...map.value.probe,
           x: displayPosition?.x ?? map.value.probe.x,
           y: displayPosition?.y ?? map.value.probe.y,
           z: displayPosition?.z ?? map.value.probe.z,
-          target_id: navigationData.destination_system_id ?? map.value.probe.target_id,
+          target_id: navigationActive ? navigationData.destination_system_id : null,
           navigation: navigationData
         }
       }
@@ -157,16 +159,17 @@ export const useMissionStore = defineStore('mission', () => {
     }
   }
 
-  async function runTick() {
-    if (loading.value) return
+  async function runTick(): Promise<boolean> {
+    if (loading.value) return false
     loading.value = true
     error.value = null
     try {
-      lastTick.value = await api.tick()
-      probe.value = lastTick.value.probe
-      navigation.value = lastTick.value.probe.navigation ?? null
-      lastEvent.value = lastTick.value.event
-      latestGeneratedLog.value = lastTick.value.log
+      const tick = await api.tick()
+      lastTick.value = tick
+      probe.value = tick.probe
+      navigation.value = tick.probe.navigation ?? null
+      lastEvent.value = tick.event
+      latestGeneratedLog.value = tick.log
       const [logsData, systemsData, mapData] = await Promise.all([
         api.getLogs(),
         api.getSystems(),
@@ -181,9 +184,10 @@ export const useMissionStore = defineStore('mission', () => {
       mapRevision.value += 1
       if (hasActiveNavigation()) startNavigationSync()
       await refreshClock()
+      return true
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'API error'
-      stopCruiseTimer()
+      return false
     } finally {
       loading.value = false
     }
@@ -197,14 +201,24 @@ export const useMissionStore = defineStore('mission', () => {
     }
   }
 
-  function scheduleCruiseTick() {
+  function scheduleCruiseTick(delayMs = 1800) {
     if (!cruiseRunning.value || tickTimer.value) return
     tickTimer.value = setTimeout(async () => {
       tickTimer.value = null
       if (!cruiseRunning.value) return
-      await runTick()
-      scheduleCruiseTick()
-    }, 1800)
+      const succeeded = await runTick()
+      scheduleCruiseTick(succeeded ? 1800 : 5000)
+    }, delayMs)
+  }
+
+  function reconcileCruiseTimer() {
+    const shouldRun = clock.value?.clock_state === 'running' && (clock.value?.time_scale ?? 0) > 0
+    if (!shouldRun) {
+      stopCruiseTimer()
+      return
+    }
+    cruiseRunning.value = true
+    scheduleCruiseTick()
   }
 
   async function startCruise() {
@@ -267,6 +281,7 @@ export const useMissionStore = defineStore('mission', () => {
 
   async function refreshClock() {
     applyClockSnapshot(await api.getClock())
+    reconcileCruiseTimer()
   }
 
   async function syncNavigationState() {
@@ -367,6 +382,7 @@ export const useMissionStore = defineStore('mission', () => {
     startNavigationSync,
     stopNavigationSync,
     stopCruiseTimer,
+    reconcileCruiseTimer,
     loadSimulationSettings,
     saveSimulationSettings,
     savePrompts,
