@@ -7,10 +7,10 @@ from app.db.session import get_db
 from app.models import CelestialBody, Signal, SimulationAction
 from app.repositories.read import active_universe, route_points, system_detail, systems
 from app.schemas.domain import MapPayload, SystemDetail, SystemRead
-from app.services.clock import advance_simulation_clock
-from app.services.navigation import latest_navigation_state, navigation_payload, synchronize_navigation
+from app.services.clock import ensure_simulation_clock
+from app.services.navigation import latest_navigation_state, navigation_payload
 from app.services.probe_spec import probe_specification
-from app.services.simulation import display_probe_offset, ensure_frontier_targets, ensure_probe, main_route_target
+from app.services.simulation import display_probe_offset, ensure_probe, main_route_target
 from app.world.generator import generated_environment_objects, real_data_epoch, stable_seed
 
 router = APIRouter(prefix="/api/world", tags=["world"])
@@ -54,12 +54,8 @@ def get_system(system_id: str, db: Session = Depends(get_db)):
 @router.get("/map", response_model=MapPayload)
 def get_map(db: Session = Depends(get_db)):
     probe = ensure_probe(db)
-    clock, _ = advance_simulation_clock(db)
+    clock = ensure_simulation_clock(db)
     nav_state = latest_navigation_state(db, probe)
-    nav_target = system_detail(db, nav_state.destination_system_id) if nav_state else None
-    synchronize_navigation(db, probe, nav_state, nav_target, clock.simulation_datetime)
-    ensure_frontier_targets(db, probe, min_unvisited=6)
-    db.commit()
     universe = active_universe(db)
     world_seed = universe.world_seed if universe else "sol-neighborhood-001"
     all_systems = systems(db)

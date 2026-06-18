@@ -68,10 +68,12 @@ def _apply_file_prompts(settings: PromptSettings) -> None:
 
 def get_prompt_settings(db: Session) -> PromptSettings:
     settings = db.get(PromptSettings, 1)
-    if settings is None:
-        settings = PromptSettings(id=1)
-        db.add(settings)
+    if settings is not None:
+        return settings
+
+    settings = PromptSettings(id=1)
     _apply_file_prompts(settings)
+    db.add(settings)
     db.commit()
     db.refresh(settings)
     return settings

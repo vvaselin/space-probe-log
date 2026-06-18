@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4.1-mini"
     prompt_dir: str = "app/prompts"
+    admin_username: str = "admin"
+    admin_password_hash: str | None = None
+    admin_session_ttl_seconds: int = 43_200
+    admin_cookie_secure: bool = False
+    admin_session_cookie_name: str = "space_probe_admin"
+    simulation_tick_interval_seconds: float = 1.8
+    scheduler_lease_seconds: int = 30
+    simulation_scheduler_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[2] / ".env",

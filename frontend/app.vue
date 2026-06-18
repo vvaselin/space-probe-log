@@ -3,7 +3,7 @@ const store = useMissionStore()
 let clockTimer: number | null = null
 
 onMounted(async () => {
-  await Promise.allSettled([store.refreshClock(), store.loadSimulationSettings()])
+  await Promise.allSettled([store.refreshClock(), store.loadSimulationSettings(), store.restoreAdminSession()])
   clockTimer = window.setInterval(() => {
     void store.refreshClock()
   }, 5000)
@@ -23,6 +23,11 @@ const selectedScale = computed({
     void store.setTimeScale(Number(value))
   }
 })
+
+async function logout() {
+  await store.logoutAdmin()
+  await navigateTo('/')
+}
 </script>
 
 <template>
@@ -34,18 +39,21 @@ const selectedScale = computed({
           <NuxtLink to="/logs">Logs</NuxtLink>
           <NuxtLink to="/map">Map</NuxtLink>
           <NuxtLink to="/probe">Probe</NuxtLink>
-          <NuxtLink to="/settings">Settings</NuxtLink>
+          <NuxtLink v-if="store.isAdmin" to="/settings">Settings</NuxtLink>
+          <NuxtLink v-else to="/admin/login">Admin</NuxtLink>
+          <button v-if="store.isAdmin" class="nav__logout" type="button" @click="logout">Logout</button>
         </div>
       </div>
       <div class="sim-hud" :class="{ 'sim-hud--paused': store.clock?.clock_state === 'paused' }">
         <span class="sim-hud__clock">SIM TIME {{ store.clock?.mission_clock ?? '2080/05/02 12:00:00 UTC' }}</span>
         <label>
           TIME
-          <select v-model.number="selectedScale">
+          <select v-if="store.isAdmin" v-model.number="selectedScale">
             <option v-for="preset in presets" :key="preset" :value="preset">
               {{ `x${preset.toLocaleString()}` }}
             </option>
           </select>
+          <span v-else class="sim-hud__scale">{{ `x${selectedScale.toLocaleString()}` }}</span>
         </label>
         <strong class="sim-hud__state">{{ store.clock?.clock_state === 'paused' ? 'PAUSED' : 'RUNNING' }}</strong>
       </div>

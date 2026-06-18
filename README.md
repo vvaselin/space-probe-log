@@ -94,9 +94,11 @@ npm.cmd run typecheck
 ## Clock Operations
 
 - 現在時計: `GET /api/simulation/clock`
-- 一時停止/再開/倍率変更: `PATCH /api/simulation/clock`
-- 開発用時計リセット: `POST /api/simulation/clock/reset`
-- 全ワールド初期化: `POST /api/simulation/reset`
+- 一時停止/再開/倍率変更（管理者）: `PATCH /api/simulation/clock`
+- 開発用時計リセット（管理者）: `POST /api/simulation/clock/reset`
+- 全ワールド初期化（管理者）: `POST /api/simulation/reset`
 - シミュレーション設定: `GET/PATCH /api/settings/simulation`
 
 `POST /api/simulation/reset` は世界、探査機、ログ、航行状態、時計を初期化します。時計だけを初期化したい場合は `POST /api/simulation/clock/reset` を使います。
+
+tickは各ブラウザではなくバックエンドの単一スケジューラが実行します。公開閲覧者は読み取り専用で、管理者操作にはログインCookieとCSRFトークンが必要です。管理者パスワードと本番Cookie設定は `backend/README.md` を参照してください。

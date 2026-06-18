@@ -285,6 +285,13 @@ export interface SimulationSettingsUpdate {
   time_scale_presets?: number[]
 }
 
+export interface AdminSession {
+  authenticated: true
+  username: string
+  csrf_token: string
+  expires_at: string
+}
+
 export interface PromptSettings {
   id: number
   probe_profile: string

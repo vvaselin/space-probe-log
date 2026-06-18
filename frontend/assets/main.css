@@ -552,6 +552,15 @@ button:disabled { opacity: 0.45; }
   border-color: var(--monitor-highlight);
   color: var(--monitor-highlight);
 }
+.nav__logout {
+  min-height: auto;
+  border: 0;
+  padding: 8px 0 4px;
+  color: #888884;
+  background: transparent;
+  font-size: 11px;
+}
+.nav__logout:hover { border: 0; color: var(--monitor-highlight); background: transparent; }
 
 .sim-hud {
   display: flex;
@@ -641,6 +650,7 @@ button:disabled { opacity: 0.45; }
 }
 
 .form-panel { max-width: 860px; gap: 22px; }
+.admin-login__form { max-width: 460px; margin: 48px auto 0; }
 .form-panel label { color: #c8c8c4; font-size: 12px; letter-spacing: 0.04em; }
 .form-panel input,
 .form-panel select,

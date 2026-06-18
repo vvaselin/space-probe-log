@@ -6,6 +6,7 @@ Requires-Dist: alembic>=1.13.2
 Requires-Dist: fastapi>=0.111.0
 Requires-Dist: httpx>=0.27.0
 Requires-Dist: pydantic-settings>=2.3.4
+Requires-Dist: pwdlib[argon2]>=0.2.1
 Requires-Dist: sqlalchemy>=2.0.31
 Requires-Dist: uvicorn[standard]>=0.30.1
 Provides-Extra: dev

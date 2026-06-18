@@ -1,4 +1,5 @@
 from app.models.entities import (
+    AdminSession,
     CelestialBody,
     Discovery,
     ExplorationLog,
@@ -8,6 +9,7 @@ from app.models.entities import (
     ProbeStateHistory,
     PromptSettings,
     ResourceInventory,
+    SchedulerLease,
     Signal,
     SimulationClock,
     SimulationSettings,
@@ -18,6 +20,7 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AdminSession",
     "CelestialBody",
     "Discovery",
     "ExplorationLog",
@@ -27,6 +30,7 @@ __all__ = [
     "ProbeStateHistory",
     "PromptSettings",
     "ResourceInventory",
+    "SchedulerLease",
     "Signal",
     "SimulationClock",
     "SimulationSettings",

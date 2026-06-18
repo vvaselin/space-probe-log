@@ -6,8 +6,18 @@ const api = useApi()
 const selectedLog = ref<LogDetail | null>(null)
 const logError = ref<string | null>(null)
 const followEnabled = ref(false)
+let dashboardTimer: number | null = null
 
-onMounted(() => store.loadAll())
+onMounted(async () => {
+  await store.loadAll()
+  dashboardTimer = window.setInterval(() => {
+    if (store.clock?.clock_state === 'running') void store.refreshDashboard()
+  }, 2500)
+})
+
+onBeforeUnmount(() => {
+  if (dashboardTimer !== null) window.clearInterval(dashboardTimer)
+})
 
 const mapKey = computed(() => {
   const map = store.map
@@ -222,12 +232,12 @@ function renderMarkdown(markdown: string) {
     </aside>
 
     <div class="hud-controls">
-      <button v-if="isCruisePaused" :disabled="store.loading" @click="store.startCruise">巡航開始</button>
-      <button v-else :disabled="store.loading" @click="store.stopCruise">一時停止</button>
+      <button v-if="store.isAdmin && isCruisePaused" :disabled="store.loading" @click="store.startCruise">巡航開始</button>
+      <button v-else-if="store.isAdmin" :disabled="store.loading" @click="store.stopCruise">一時停止</button>
       <button class="button-secondary" type="button" :class="{ 'is-active': followEnabled }" @click="followEnabled = !followEnabled">
         {{ followEnabled ? '追尾解除' : '探査機を追尾' }}
       </button>
-      <button :disabled="store.loading" class="button-secondary" @click="resetSimulation">リセット</button>
+      <button v-if="store.isAdmin" :disabled="store.loading" class="button-secondary" @click="resetSimulation">リセット</button>
       <span v-if="formattedPosition" class="hud-coordinates">LOC: {{ formattedPosition }}</span>
     </div>
 

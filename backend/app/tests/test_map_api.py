@@ -1,8 +1,24 @@
 from fastapi.testclient import TestClient
+import pytest
 
 import app.api.simulation as simulation_api
+from app.core.config import get_settings
 from app.llm.mock import MockLLMClient
 from app.main import app
+from app.services.auth import require_admin
+
+
+@pytest.fixture(autouse=True)
+def admin_api_override():
+    settings = get_settings()
+    previous_scheduler_enabled = settings.simulation_scheduler_enabled
+    settings.simulation_scheduler_enabled = False
+    app.dependency_overrides[require_admin] = lambda: None
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(require_admin, None)
+        settings.simulation_scheduler_enabled = previous_scheduler_enabled
 
 
 def test_map_contains_dynamic_frontier_and_distant_stars() -> None:

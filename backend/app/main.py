@@ -1,3 +1,6 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
@@ -7,11 +10,30 @@ from app.api import routers
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import engine
+from app.services.scheduler import run_simulation_scheduler
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    settings = get_settings()
+    stop_event = asyncio.Event()
+    scheduler_task = (
+        asyncio.create_task(run_simulation_scheduler(stop_event))
+        if settings.simulation_scheduler_enabled
+        else None
+    )
+    try:
+        yield
+    finally:
+        if scheduler_task is not None:
+            stop_event.set()
+            await scheduler_task
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.app_name)
+    app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
@@ -28,10 +50,6 @@ def create_app() -> FastAPI:
             status_code=500,
             content={"detail": "Internal server error", "error": exc.__class__.__name__},
         )
-
-    @app.on_event("startup")
-    def create_tables_for_dev() -> None:
-        Base.metadata.create_all(bind=engine)
 
     return app
 

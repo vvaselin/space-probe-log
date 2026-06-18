@@ -3,6 +3,11 @@ const store = useMissionStore()
 const presetText = ref('')
 
 onMounted(async () => {
+  await store.restoreAdminSession()
+  if (!store.isAdmin) {
+    await navigateTo('/admin/login')
+    return
+  }
   await store.loadSimulationSettings()
   presetText.value = (store.simulationSettings?.time_scale_presets ?? []).join(', ')
 })
@@ -47,7 +52,7 @@ async function save() {
   <main class="page">
     <h1>Simulation Settings</h1>
     <div v-if="store.error" class="error">{{ store.error }}</div>
-    <section v-if="store.simulationSettings" class="panel form-panel">
+    <section v-if="store.isAdmin && store.simulationSettings" class="panel form-panel">
       <label>
         Default time scale
         <select v-model.number="defaultScale">

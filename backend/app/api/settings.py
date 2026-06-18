@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.repositories.settings import get_prompt_settings, update_prompt_settings
 from app.schemas.domain import PromptSettingsRead, PromptSettingsUpdate, SimulationSettingsRead, SimulationSettingsUpdate
 from app.services.clock import ensure_simulation_settings, update_simulation_settings
+from app.services.auth import require_admin
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -15,7 +16,7 @@ def read_prompts(db: Session = Depends(get_db)):
 
 
 @router.put("/prompts", response_model=PromptSettingsRead)
-def save_prompts(payload: PromptSettingsUpdate, db: Session = Depends(get_db)):
+def save_prompts(payload: PromptSettingsUpdate, db: Session = Depends(get_db), _admin=Depends(require_admin)):
     return update_prompt_settings(db, payload)
 
 
@@ -27,7 +28,7 @@ def read_simulation_settings(db: Session = Depends(get_db)):
 
 
 @router.patch("/simulation", response_model=SimulationSettingsRead)
-def save_simulation_settings(payload: SimulationSettingsUpdate, db: Session = Depends(get_db)):
+def save_simulation_settings(payload: SimulationSettingsUpdate, db: Session = Depends(get_db), _admin=Depends(require_admin)):
     settings = update_simulation_settings(db, payload)
     db.commit()
     db.refresh(settings)
