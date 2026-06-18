@@ -111,7 +111,7 @@ onMounted(() => {
   renderer.toneMappingExposure = 1.15
   host.value.appendChild(renderer.domElement)
 
-  scene.add(new THREE.AmbientLight(0xb8c8e6, 0.16))
+  scene.add(new THREE.AmbientLight(0xb8c8e6, 0.035))
 
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
@@ -137,11 +137,11 @@ onMounted(() => {
   const systemMaterial = new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0xa56a16, roughness: 0.42 })
   const farObjectiveMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff })
   const waypointMaterial = new THREE.MeshBasicMaterial({ color: 0xdbeafe, transparent: true, opacity: 0.92 })
-  const rockyMaterial = new THREE.MeshStandardMaterial({ color: 0xb8a58d, emissive: 0x28190f, roughness: 0.88 })
-  const earthMaterial = new THREE.MeshStandardMaterial({ color: 0x5fa8ff, emissive: 0x123d2a, roughness: 0.55 })
-  const gasMaterial = new THREE.MeshStandardMaterial({ color: 0x9fc4ff, emissive: 0x233764, roughness: 0.72 })
-  const iceMaterial = new THREE.MeshStandardMaterial({ color: 0xbad9ff, emissive: 0x17304c, roughness: 0.62 })
-  const moonMaterial = new THREE.MeshStandardMaterial({ color: 0xb7b2ab, emissive: 0x141414, roughness: 0.94 })
+  const rockyMaterial = new THREE.MeshStandardMaterial({ color: 0xb8a58d, roughness: 0.96, metalness: 0 })
+  const earthMaterial = new THREE.MeshStandardMaterial({ color: 0x5fa8ff, roughness: 0.92, metalness: 0 })
+  const gasMaterial = new THREE.MeshStandardMaterial({ color: 0x9fc4ff, roughness: 0.94, metalness: 0 })
+  const iceMaterial = new THREE.MeshStandardMaterial({ color: 0xbad9ff, roughness: 0.9, metalness: 0 })
+  const moonMaterial = new THREE.MeshStandardMaterial({ color: 0xb7b2ab, roughness: 1, metalness: 0 })
   const lifeMaterial = new THREE.MeshStandardMaterial({ color: 0x78f5bd, emissive: 0x0d4b33, roughness: 0.55 })
   const signalMaterial = new THREE.MeshStandardMaterial({ color: 0xff5c8a, emissive: 0x7a1230, roughness: 0.3 })
   const probeMaterial = new THREE.MeshStandardMaterial({ color: 0xf8fbff, emissive: 0x244a8f, roughness: 0.35, metalness: 0.25 })
@@ -162,17 +162,18 @@ onMounted(() => {
     const textureSet = pickTextureSet(textureKey)
     const map = loadTexture(textureSet?.albedo)
     const roughnessMap = loadTexture(textureSet?.roughness)
-    const emissionMap = loadTexture(textureSet?.emission)
+    const selfLuminous = textureKey?.startsWith('lava_') ?? false
+    const emissionMap = selfLuminous ? loadTexture(textureSet?.emission) : undefined
     if (!map && !roughnessMap && !emissionMap) return fallback
     return new THREE.MeshStandardMaterial({
       color: fallback.color,
-      emissive: fallback.emissive,
-      roughness: fallback.roughness,
-      metalness: fallback.metalness,
+      emissive: selfLuminous ? 0x5a1608 : 0x000000,
+      roughness: Math.max(0.9, fallback.roughness),
+      metalness: 0,
       map,
       roughnessMap,
       emissiveMap: emissionMap,
-      emissiveIntensity: emissionMap ? 0.75 : 0.25,
+      emissiveIntensity: emissionMap ? 0.65 : 0,
     })
   }
   const bodyFallbackMaterial = (body: MapPayload['bodies'][number]) => {
@@ -284,28 +285,54 @@ onMounted(() => {
     return material
   }
 
-  const starPositions: number[] = []
-  const starColors: number[] = []
-  const color = new THREE.Color()
-  for (const star of props.payload.distant_stars ?? []) {
-    starPositions.push(star.x, star.y, star.z)
-    color.set(star.color)
-    starColors.push(color.r * star.brightness, color.g * star.brightness, color.b * star.brightness)
-  }
-  const starGeometry = new THREE.BufferGeometry()
-  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3))
-  starGeometry.setAttribute('color', new THREE.Float32BufferAttribute(starColors, 3))
-  const starPoints = new THREE.Points(
-    starGeometry,
-    new THREE.PointsMaterial({
-      size: 1.25,
+  const distantStars = props.payload.distant_stars ?? []
+  const starPoints = new THREE.Group()
+  const starGeometries: THREE.BufferGeometry[] = []
+  const starPointMaterials: THREE.PointsMaterial[] = []
+  const addDistantStarLayer = (
+    stars: typeof distantStars,
+    textureUrl: string | undefined,
+    size: number,
+    opacity: number,
+  ) => {
+    const positions: number[] = []
+    const colors: number[] = []
+    const color = new THREE.Color()
+    for (const star of stars) {
+      positions.push(star.x, star.y, star.z)
+      color.set(star.color)
+      colors.push(color.r * star.brightness, color.g * star.brightness, color.b * star.brightness)
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+    const material = new THREE.PointsMaterial({
+      map: loadTexture(textureUrl),
+      size,
       vertexColors: true,
       transparent: true,
-      opacity: 0.96,
-      sizeAttenuation: true,
+      opacity,
+      alphaTest: 0.06,
+      sizeAttenuation: false,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
     })
+    starGeometries.push(geometry)
+    starPointMaterials.push(material)
+    starPoints.add(new THREE.Points(geometry, material))
+  }
+  addDistantStarLayer(
+    distantStars.filter((star) => star.brightness < 1.35),
+    pickTextureSet('star_yellow_01')?.albedo,
+    5,
+    0.82,
+  )
+  addDistantStarLayer(
+    distantStars.filter((star) => star.brightness >= 1.35),
+    pickTextureSet('star_blue_01')?.albedo,
+    10,
+    0.95,
   )
   scene.add(starPoints)
 
@@ -330,37 +357,13 @@ onMounted(() => {
 
   type StellarLightCandidate = { position: THREE.Vector3; color: THREE.Color; emissionStrength: number }
   const stellarCandidates: StellarLightCandidate[] = []
-  const glowMaterials: THREE.SpriteMaterial[] = []
-  const glowCanvas = document.createElement('canvas')
-  glowCanvas.width = 128
-  glowCanvas.height = 128
-  const glowContext = glowCanvas.getContext('2d')
-  if (glowContext) {
-    const gradient = glowContext.createRadialGradient(64, 64, 0, 64, 64, 64)
-    gradient.addColorStop(0, 'rgba(255,255,255,1)')
-    gradient.addColorStop(0.16, 'rgba(255,255,255,0.88)')
-    gradient.addColorStop(0.48, 'rgba(255,255,255,0.2)')
-    gradient.addColorStop(1, 'rgba(255,255,255,0)')
-    glowContext.fillStyle = gradient
-    glowContext.fillRect(0, 0, 128, 128)
+  const stellarMaterials: THREE.MeshBasicMaterial[] = []
+  const createStellarMaterial = (colorValue: THREE.Color) => {
+    const material = new THREE.MeshBasicMaterial({ color: colorValue, toneMapped: false })
+    stellarMaterials.push(material)
+    return material
   }
-  const glowTexture = new THREE.CanvasTexture(glowCanvas)
-  glowTexture.colorSpace = THREE.SRGBColorSpace
-  const addStellarGlow = (position: THREE.Vector3, colorValue: THREE.Color, radius: number, emissionStrength: number) => {
-    const material = new THREE.SpriteMaterial({
-      map: glowTexture,
-      color: colorValue,
-      transparent: true,
-      opacity: clamp(0.58 + emissionStrength * 0.12, 0.62, 0.92),
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    })
-    const sprite = new THREE.Sprite(material)
-    sprite.position.copy(position)
-    sprite.scale.setScalar(radius * clamp(5 + emissionStrength, 5.5, 8.5))
-    scene.add(sprite)
-    glowMaterials.push(material)
+  const registerStellarLight = (position: THREE.Vector3, colorValue: THREE.Color, emissionStrength: number) => {
     stellarCandidates.push({ position: position.clone(), color: colorValue.clone(), emissionStrength })
   }
   const stellarLightPool = Array.from({ length: 4 }, () => {
@@ -383,8 +386,8 @@ onMounted(() => {
       }
       light.position.copy(candidate.position)
       light.color.copy(candidate.color)
-      light.intensity = clamp(candidate.emissionStrength * 14, 10, 32)
-      light.distance = clamp(130 + candidate.emissionStrength * 45, 160, 280)
+      light.intensity = clamp(candidate.emissionStrength * 900, 650, 1800)
+      light.distance = clamp(220 + candidate.emissionStrength * 80, 280, 460)
     })
   }
 
@@ -395,15 +398,13 @@ onMounted(() => {
   for (const system of props.payload.systems) {
     const isFarObjective = system.object_role === 'far_objective'
     const isWaypoint = system.object_role === 'navigation_waypoint'
-    const baseMaterial = system.has_life ? lifeMaterial : systemMaterial
+    const starColor = emissiveColor(system.visual_data?.emissive)
+    const emissionStrength = system.visual_data?.emission_strength ?? 1.25
     const material = isWaypoint
       ? waypointMaterial
       : isFarObjective
         ? farObjectiveMaterial
-        : texturedStandardMaterial(system.visual_data?.texture_key, baseMaterial)
-    if (material instanceof THREE.MeshStandardMaterial && system.visual_data?.emissive) {
-      material.emissive.copy(emissiveColor(system.visual_data.emissive))
-    }
+        : createStellarMaterial(starColor)
     const radius = isWaypoint ? 0.72 : isFarObjective ? 1.8 : system.id === 'sol' ? 1.45 : 1.05
     const geometry = isWaypoint ? new THREE.OctahedronGeometry(radius, 0) : new THREE.SphereGeometry(radius, 32, 20)
     const mesh = new THREE.Mesh(geometry, material)
@@ -412,13 +413,7 @@ onMounted(() => {
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
     if (!isWaypoint && !isFarObjective && !systemsWithStellarBodies.has(system.id)) {
-      const starColor = emissiveColor(system.visual_data?.emissive)
-      const emissionStrength = system.visual_data?.emission_strength ?? 1.25
-      if (material instanceof THREE.MeshStandardMaterial) {
-        material.emissive.copy(starColor)
-        material.emissiveIntensity = emissionStrength
-      }
-      addStellarGlow(mesh.position, starColor, radius, emissionStrength)
+      registerStellarLight(mesh.position, starColor, emissionStrength)
     }
 
     const ringColor = isWaypoint ? 0xdbeafe : isFarObjective ? 0xffffff : system.has_life ? 0x6df2b2 : 0xffd166
@@ -443,15 +438,12 @@ onMounted(() => {
   }
 
   for (const body of props.payload.bodies) {
-    const bodyMaterial = texturedStandardMaterial(body.visual_data?.texture_key, bodyFallbackMaterial(body))
-    if (body.visual_data?.emissive) {
-      bodyMaterial.emissive.copy(emissiveColor(body.visual_data.emissive))
-    }
-    if (typeof body.visual_data?.roughness === 'number') {
-      bodyMaterial.roughness = body.visual_data.roughness
-    }
-    if (body.type === 'star') {
-      bodyMaterial.emissiveIntensity = body.visual_data?.emission_strength ?? 1.25
+    const bodyStarColor = emissiveColor(body.visual_data?.emissive)
+    const bodyMaterial = body.type === 'star'
+      ? createStellarMaterial(bodyStarColor)
+      : texturedStandardMaterial(body.visual_data?.texture_key, bodyFallbackMaterial(body))
+    if (typeof body.visual_data?.roughness === 'number' && bodyMaterial instanceof THREE.MeshStandardMaterial) {
+      bodyMaterial.roughness = Math.max(0.88, body.visual_data.roughness)
     }
     const visualRadius = bodyVisualRadius(body)
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(visualRadius, 24, 16), bodyMaterial)
@@ -460,12 +452,7 @@ onMounted(() => {
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
     if (body.type === 'star') {
-      addStellarGlow(
-        mesh.position,
-        emissiveColor(body.visual_data?.emissive),
-        visualRadius,
-        body.visual_data?.emission_strength ?? 1.25,
-      )
+      registerStellarLight(mesh.position, bodyStarColor, body.visual_data?.emission_strength ?? 1.25)
     }
     if (body.visual_data?.ring) {
       const ringVisual = body.visual_data.ring
@@ -546,10 +533,9 @@ onMounted(() => {
 
   const probeLength = probeVisualLength(props.payload)
   const probe = new THREE.Mesh(new THREE.ConeGeometry(probeLength * 0.34, probeLength, 4), probeMaterial)
-  const probeVisualOffset = new THREE.Vector3(probeLength * 1.4, probeLength * 2.3, probeLength * 1.1)
   const probeMotion = useProbeMotion(props.payload)
   const probeCurrentAnchor = probeMotion.renderedPosition
-  probe.position.copy(probeCurrentAnchor.clone().add(probeVisualOffset))
+  probe.position.copy(probeCurrentAnchor)
   probe.userData.label = props.payload.probe.name
   scene.add(probe)
   selectable.push(probe as unknown as Selectable)
@@ -721,8 +707,7 @@ onMounted(() => {
     const projected = vectorFrom(destination).project(camera)
     const x = (projected.x * 0.5 + 0.5) * host.value.clientWidth
     const y = (-projected.y * 0.5 + 0.5) * host.value.clientHeight
-    const calloutFitsMap = x >= 5 && x + 310 <= host.value.clientWidth && y >= 84 && y + 26 <= host.value.clientHeight
-    const visible = projected.z >= -1 && projected.z <= 1 && calloutFitsMap
+    const visible = projected.z >= -1 && projected.z <= 1
     element.hidden = !visible
     if (!visible) return
     element.style.transform = `translate3d(${x}px, ${y}px, 0)`
@@ -768,7 +753,7 @@ onMounted(() => {
     if (followCamera.isEnabled() === enabled) return
     localFollowEnabled.value = enabled
     if (enabled) selected.value = props.payload.probe.name
-    followCamera.setEnabled(enabled, probe.position)
+    followCamera.setEnabled(enabled, probeCurrentAnchor)
   }
   if (props.followEnabled) setProbeFollow(true)
 
@@ -797,7 +782,7 @@ onMounted(() => {
     lastFrameAt = now
     const motionPaused = isMotionPaused()
     if (!motionPaused) probeMotion.updateFrame(deltaSeconds, now)
-    probe.position.copy(probeCurrentAnchor).add(probeVisualOffset)
+    probe.position.copy(probeCurrentAnchor)
     probeMarker.position.copy(probeCurrentAnchor)
     if (!motionPaused) {
       probe.rotation.y += 0.014
@@ -815,9 +800,7 @@ onMounted(() => {
     for (const material of cloudMaterials) material.uniforms.uTime.value = time
     for (const mesh of cloudMeshes) mesh.lookAt(camera.position)
     controls.update()
-    followCamera.update(probe.position)
-    const distance = camera.position.distanceTo(controls.target)
-    starPoints.visible = distance > 8
+    followCamera.update(probeCurrentAnchor)
     for (const entry of lodEntries) {
       const objectDistance = camera.position.distanceTo(entry.mesh.position)
       const isNear = objectDistance <= entry.near
@@ -849,12 +832,12 @@ onMounted(() => {
     resizeObserver.disconnect()
     controls.dispose()
     for (const light of stellarLightPool) scene.remove(light)
-    for (const material of glowMaterials) material.dispose()
-    glowTexture.dispose()
+    for (const material of stellarMaterials) material.dispose()
     for (const texture of textureCache.values()) texture.dispose()
     for (const material of cloudMaterials) material.dispose()
     renderer.dispose()
-    starGeometry.dispose()
+    for (const geometry of starGeometries) geometry.dispose()
+    for (const material of starPointMaterials) material.dispose()
     for (const entry of lodEntries) {
       entry.point.geometry.dispose()
       const material = entry.point.material

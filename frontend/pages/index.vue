@@ -27,6 +27,24 @@ const missionClock = computed(() => store.clock?.mission_clock ?? store.probe?.m
 const selectedLogBody = computed(() => renderMarkdown(selectedLog.value?.body_markdown ?? ''))
 const isCruisePaused = computed(() => store.clock?.clock_state !== 'running')
 const routeProgressPercent = computed(() => Math.max(0, Math.min(100, Math.round(route.value?.progress_percent ?? 0))))
+const currentSystem = computed(() => store.systems.find((system) => system.id === store.probe?.current_system_id) ?? null)
+const currentSystemLabel = computed(() => {
+  const systemId = store.probe?.current_system_id ?? '-'
+  const systemName = currentSystem.value?.name
+  return systemName && systemName.toLowerCase() !== systemId.toLowerCase() ? `${systemName} / ${systemId}` : systemId
+})
+const locationDetail = computed(() => {
+  const galactic = route.value?.galactic_position_pc
+  const local = route.value?.local_position_au
+  const position = galactic ?? local ?? store.map?.probe ?? null
+  if (!position) return null
+  const format = (value: number) => Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(4)
+  return {
+    label: galactic ? 'GALACTIC' : local ? 'LOCAL' : 'MAP',
+    value: `X ${format(position.x)}  Y ${format(position.y)}  Z ${format(position.z)}`,
+    unit: galactic ? 'pc' : local ? 'AU' : '',
+  }
+})
 const displayPosition = computed(() => route.value?.display_position ?? store.map?.probe ?? null)
 const formattedPosition = computed(() => {
   const position = displayPosition.value
@@ -152,7 +170,10 @@ function renderMarkdown(markdown: string) {
         <p class="hud-kicker">探査機</p>
         <h1>{{ store.probe.name }}</h1>
         <p class="hud-location">{{ missionClock }}</p>
-        <p class="muted">{{ store.probe.current_system_id }}</p>
+        <div class="hud-position">
+          <strong>{{ currentSystemLabel }}</strong>
+          <small v-if="locationDetail">{{ locationDetail.label }} / {{ locationDetail.value }} {{ locationDetail.unit }}</small>
+        </div>
         <p v-if="store.probe.target_id" class="hud-target">航行中: {{ store.probe.target_id }}</p>
         <p class="hud-mission">{{ store.probe.current_mission }}</p>
       </section>
