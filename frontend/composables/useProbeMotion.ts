@@ -66,7 +66,7 @@ export function useProbeMotion(initialPayload: MapPayload) {
     const frozenPosition = renderedPosition.clone()
     const next = snapshotFromPayload(payload)
     const nextPaused = next.timeScale === 0
-    if (wasPaused || nextPaused) {
+    if (nextPaused) {
       renderedPosition.copy(frozenPosition)
       snapshot = {
         ...next,
@@ -75,6 +75,12 @@ export function useProbeMotion(initialPayload: MapPayload) {
         timeScale: 0,
       }
       paused = true
+      return
+    }
+    if (wasPaused) {
+      snapshot = next
+      renderedPosition.copy(next.position)
+      paused = false
       return
     }
     const destinationChanged = snapshot.targetId !== next.targetId

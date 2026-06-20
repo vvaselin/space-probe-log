@@ -47,6 +47,9 @@ class ObservationFact(BaseModel):
     sighting_level: Literal["detected", "resolved", "confirmed"] = "confirmed"
     source: str | None = None
     distance_hint: str | None = None
+    body_type: str | None = None
+    object_type: str | None = None
+    scene_category: str | None = None
 
 
 class Interpretation(BaseModel):
@@ -76,6 +79,9 @@ class LogContext(BaseModel):
     probe_snapshot: dict[str, Any]
     observations: list[ObservationFact]
     interpretations: list[Interpretation]
+    nearby_bodies: list[dict[str, Any]] = Field(default_factory=list)
+    nearby_environment_objects: list[dict[str, Any]] = Field(default_factory=list)
+    route_context: dict[str, Any] = Field(default_factory=dict)
     prompt_settings: dict[str, str] = Field(default_factory=dict)
 
 
@@ -318,6 +324,7 @@ class MapPayload(BaseModel):
     bodies: list[dict[str, Any]]
     signals: list[dict[str, Any]]
     environment_objects: list[dict[str, Any]] = Field(default_factory=list)
+    small_body_layers: list[dict[str, Any]] = Field(default_factory=list)
     probe: dict[str, Any]
     route: list[dict[str, float]]
     route_prediction: dict[str, Any] | None = None

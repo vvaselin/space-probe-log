@@ -8,7 +8,7 @@ from app.api.serializers import probe_read
 from app.services.auth import require_admin
 from app.services.clock import clock_payload, ensure_simulation_clock, reset_simulation_clock, update_simulation_clock
 from app.services.reset import reset_world
-from app.services.scheduler import wait_for_tick_idle
+from app.services.scheduler import SIMULATION_OPERATION_LOCK, clear_scheduler_lease, wait_for_tick_idle
 from app.services.simulation import run_step, run_tick
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
@@ -22,8 +22,9 @@ def require_running_clock(db: Session) -> None:
 
 @router.post("/step", response_model=SimulationStepResponse)
 async def step(db: Session = Depends(get_db), _admin=Depends(require_admin)):
-    require_running_clock(db)
-    action, event, log, probe = await run_step(db, get_llm_client())
+    async with SIMULATION_OPERATION_LOCK:
+        require_running_clock(db)
+        action, event, log, probe = await run_step(db, get_llm_client())
     probe_payload = probe_read(db, probe)
     clock = {
         "mission_clock": probe_payload.mission_clock,
@@ -48,8 +49,9 @@ async def step(db: Session = Depends(get_db), _admin=Depends(require_admin)):
 
 @router.post("/tick", response_model=SimulationTickResponse)
 async def tick(db: Session = Depends(get_db), _admin=Depends(require_admin)):
-    require_running_clock(db)
-    action, event, log, probe, route = await run_tick(db, get_llm_client())
+    async with SIMULATION_OPERATION_LOCK:
+        require_running_clock(db)
+        action, event, log, probe, route = await run_tick(db, get_llm_client())
     probe_payload = probe_read(db, probe)
     clock = {
         "mission_clock": probe_payload.mission_clock,
@@ -81,11 +83,19 @@ async def tick(db: Session = Depends(get_db), _admin=Depends(require_admin)):
 
 
 @router.post("/reset", response_model=ProbeRead)
-def reset(payload: ResetRequest, db: Session = Depends(get_db), _admin=Depends(require_admin)):
-    probe = reset_world(db, payload.world_seed)
-    reset_simulation_clock(db, clock_state=ClockState.paused)
-    db.commit()
-    return probe_read(db, probe)
+async def reset(payload: ResetRequest, db: Session = Depends(get_db), _admin=Depends(require_admin)):
+    async with SIMULATION_OPERATION_LOCK:
+        clock = ensure_simulation_clock(db)
+        clock.clock_state = ClockState.paused.value
+        db.commit()
+        try:
+            await wait_for_tick_idle()
+        except TimeoutError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        db.expire_all()
+        clear_scheduler_lease(db)
+        probe = reset_world(db, payload.world_seed, clock_state=ClockState.paused)
+        return probe_read(db, probe)
 
 
 @router.get("/clock", response_model=SimulationClockRead)

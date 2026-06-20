@@ -1,11 +1,18 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import asyncio
 
 import math
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.models import ProbeNavigationState, ProbeStateHistory, SimulationEvent, StarSystem
+from app.core.config import get_settings
+from app.db.base import Base
+from app.llm.mock import MockLLMClient
+from app.models import CelestialBody, ProbeNavigationState, ProbeStateHistory, SimulationAction, SimulationClock, SimulationEvent, StarSystem
 from app.repositories.read import route_points
 from app.schemas.domain import ClockState, SimulationClockUpdate, SimulationSettingsUpdate
 from app.services.clock import (
@@ -15,10 +22,19 @@ from app.services.clock import (
     update_simulation_clock,
     update_simulation_settings,
 )
-from app.services.navigation import begin_navigation, navigation_milestone_sample, navigation_payload, synchronize_navigation
+from app.services.navigation import (
+    begin_navigation,
+    body_upper_display_anchor,
+    navigation_display_anchor,
+    navigation_milestone_sample,
+    navigation_payload,
+    rendered_body_radius,
+    synchronize_navigation,
+)
 from app.services.probe_spec import probe_specification
 from app.services.reset import reset_world
 from app.services.simulation import ensure_frontier_targets
+from app.services import scheduler
 
 
 def add_legacy_outer_lighthouse(db, probe) -> StarSystem:
@@ -149,6 +165,86 @@ def test_existing_navigation_state_upgrades_to_current_piano_drive_output(db) ->
 
 def test_probe_specification_length_is_eighteen_meters() -> None:
     assert probe_specification().length_m == 18
+
+
+def test_reset_places_probe_above_earth_without_changing_physical_position(db) -> None:
+    probe = reset_world(db, "earth-upper-anchor")
+    earth = db.get(CelestialBody, "earth")
+    expected_display = body_upper_display_anchor(earth)
+    assert (probe.x, probe.y, probe.z) == pytest.approx((earth.sim_x, earth.sim_y, earth.sim_z))
+    assert (probe.display_x, probe.display_y, probe.display_z) == pytest.approx(expected_display)
+    assert probe.display_y > earth.display_y + rendered_body_radius(earth)
+
+
+def test_reset_world_can_commit_directly_to_paused_clock(db) -> None:
+    reset_world(db, "paused-world-reset", clock_state=ClockState.paused)
+    simulation_clock = db.get(SimulationClock, 1)
+    assert simulation_clock is not None
+    assert simulation_clock.clock_state == ClockState.paused.value
+
+
+@pytest.mark.asyncio
+async def test_scheduler_plots_initial_route_after_paused_reset(monkeypatch) -> None:
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    testing_session = sessionmaker(bind=engine, expire_on_commit=False)
+    settings = get_settings()
+    previous_interval = settings.simulation_tick_interval_seconds
+    settings.simulation_tick_interval_seconds = 0.02
+    monkeypatch.setattr(scheduler, "SessionLocal", testing_session)
+    monkeypatch.setattr(scheduler, "get_llm_client", MockLLMClient)
+    try:
+        with testing_session() as db:
+            reset_world(db, "scheduler-reset-start", clock_state=ClockState.paused)
+
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(scheduler.run_simulation_scheduler(stop_event))
+        await asyncio.sleep(0.05)
+        with testing_session() as db:
+            clock = db.get(SimulationClock, 1)
+            clock.clock_state = ClockState.running.value
+            db.commit()
+
+        action = None
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            with testing_session() as db:
+                action = db.query(SimulationAction).order_by(SimulationAction.id.desc()).first()
+            if action is not None:
+                break
+        stop_event.set()
+        await task
+
+        assert action is not None
+        assert action.validated_action == "move"
+        assert action.target_id == "outer-solar-marker"
+    finally:
+        settings.simulation_tick_interval_seconds = previous_interval
+        engine.dispose()
+
+
+def test_stellar_navigation_arrives_above_primary_star(db) -> None:
+    probe = reset_world(db, "stellar-upper-anchor")
+    target = db.get(StarSystem, "sys-1")
+    expected = navigation_display_anchor(db, target)
+    state = begin_navigation(db, probe, target, datetime(2080, 5, 2, 12, tzinfo=UTC))
+    scheduled = state.schedule["destination_display_position"]
+    assert (scheduled["x"], scheduled["y"], scheduled["z"]) == pytest.approx(expected)
+
+    synchronize_navigation(db, probe, state, target, state.eta_datetime + timedelta(seconds=1))
+
+    assert (probe.display_x, probe.display_y, probe.display_z) == pytest.approx(expected)
+    assert probe.current_system_id == target.id
+
+
+def test_waypoint_navigation_keeps_center_destination(db) -> None:
+    probe = reset_world(db, "waypoint-center-anchor")
+    target = db.get(StarSystem, "outer-solar-marker")
+    state = begin_navigation(db, probe, target, datetime(2080, 5, 2, 12, tzinfo=UTC))
+    destination = state.schedule["destination_display_position"]
+    assert (destination["x"], destination["y"], destination["z"]) == pytest.approx(
+        (target.display_x, target.display_y, target.display_z)
+    )
 
 
 def test_reset_clears_navigation_and_route_history_to_initial_position(db) -> None:

@@ -1,7 +1,7 @@
 import math
-import random
 import re
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from pydantic import ValidationError
 from sqlalchemy import select, update
@@ -47,7 +47,14 @@ from app.services.navigation import (
 )
 from app.services.probe_spec import PROBE_ID, PROBE_LEGACY_IDS, PROBE_NAME, probe_specification
 from app.services.snapshots import probe_snapshot
-from app.world.generator import SystemSpec, frontier_shell_systems, stable_seed
+from app.world.generator import (
+    EnvironmentObjectSpec,
+    SmallBodyLayerSpec,
+    SystemSpec,
+    frontier_shell_systems,
+    generated_environment_objects,
+    generated_small_body_layers,
+)
 
 LAUNCH_TARGET_ID = "outer-solar-marker"
 LEGACY_FAR_OBJECTIVE_ROLE = "far_objective"
@@ -98,29 +105,6 @@ def _physical_outward_score(probe: Probe, item: StarSystem) -> tuple[float, floa
     dot = sum(left * right for left, right in zip(probe_vector, item_vector, strict=True)) / max(probe_radius * max(item_radius, 1e-9), 1e-9)
     forward_distance = sum((axis / probe_radius) * item_axis for axis, item_axis in zip(probe_vector, item_vector, strict=True))
     return item_radius, dot, forward_distance
-
-
-def display_probe_offset(target: StarSystem) -> tuple[float, float, float]:
-    """Keep the visual probe marker readable near large stars or planets."""
-    if target.kind == "waypoint" or target.details.get("object_role") == "navigation_waypoint":
-        return target.display_x, target.display_y, target.display_z
-    rng = random.Random(stable_seed(target.id, "probe-display-offset"))
-    x = target.display_x
-    y = target.display_y
-    z = target.display_z
-    length = math.sqrt(x * x + y * y + z * z)
-    if length < 0.01:
-        direction = (0.78, 0.36, 0.52)
-    else:
-        direction = (x / length, y / length, z / length)
-    angle = rng.uniform(-0.28, 0.28)
-    cos_a = math.cos(angle)
-    sin_a = math.sin(angle)
-    dx = direction[0] * cos_a - direction[2] * sin_a
-    dz = direction[0] * sin_a + direction[2] * cos_a
-    dy = max(0.18, direction[1]) + 0.14
-    magnitude = 7.2 if target.details.get("object_role") == "far_objective" else 5.4
-    return x + dx * magnitude, y + dy * magnitude, z + dz * magnitude
 
 
 def ensure_probe(db: Session) -> Probe:
@@ -649,6 +633,235 @@ def _vector_from_system(system: StarSystem) -> tuple[float, float, float]:
     return system.display_x, system.display_y, system.display_z
 
 
+def _point_to_segment_distance(
+    point: tuple[float, float, float],
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+) -> float:
+    segment = tuple(right - left for left, right in zip(start, end, strict=True))
+    length_squared = sum(axis * axis for axis in segment)
+    if length_squared <= 1e-9:
+        return _distance(point, start)
+    offset = tuple(value - origin for value, origin in zip(point, start, strict=True))
+    fraction = max(0.0, min(1.0, sum(left * right for left, right in zip(offset, segment, strict=True)) / length_squared))
+    closest = tuple(origin + axis * fraction for origin, axis in zip(start, segment, strict=True))
+    return _distance(point, closest)
+
+
+def _route_environment_objects(db: Session, probe: Probe, target: StarSystem) -> list[EnvironmentObjectSpec]:
+    start = _vector_from_probe(probe)
+    end = _vector_from_system(target)
+    candidates: list[tuple[float, EnvironmentObjectSpec]] = []
+    for item in generated_environment_objects(_world_seed(db), systems(db)):
+        route_distance = _point_to_segment_distance(item.display, start, end)
+        extent = max(item.scale)
+        if route_distance <= extent * 1.5:
+            candidates.append((route_distance / max(extent, 1.0), item))
+    return [item for _, item in sorted(candidates, key=lambda entry: (entry[0], entry[1].id))]
+
+
+def _route_small_body_layers(db: Session, probe: Probe, target: StarSystem) -> list[SmallBodyLayerSpec]:
+    start = _vector_from_probe(probe)
+    end = _vector_from_system(target)
+    candidates: list[SmallBodyLayerSpec] = []
+    for layer in generated_small_body_layers(_world_seed(db)):
+        minimum_radius = _point_to_segment_distance(layer.center, start, end)
+        maximum_radius = max(_distance(layer.center, start), _distance(layer.center, end))
+        if minimum_radius > layer.outer_radius or maximum_radius < layer.inner_radius:
+            continue
+        if layer.layer_type == "asteroid_belt":
+            start_y = start[1] - layer.center[1]
+            end_y = end[1] - layer.center[1]
+            minimum_y = 0.0 if start_y * end_y <= 0 else min(abs(start_y), abs(end_y))
+            if minimum_y > layer.thickness:
+                continue
+        candidates.append(layer)
+    return sorted(candidates, key=lambda item: (item.outer_radius, item.id))
+
+
+def _nearby_route_bodies(db: Session, probe: Probe, target: StarSystem, route_phase: str | None) -> list[CelestialBody]:
+    phase = route_phase or "interstellar_cruise"
+    system_ids: list[str]
+    if phase in {"course_plotted", "system_departure", "accelerating"}:
+        system_ids = [probe.current_system_id]
+    elif phase in {"decelerating", "system_arrival", "arrived"}:
+        system_ids = [target.id]
+    else:
+        system_ids = [probe.current_system_id, target.id]
+
+    probe_point = _vector_from_probe(probe)
+    bodies: list[CelestialBody] = []
+    seen: set[str] = set()
+    for system_id in system_ids:
+        detail = system_detail(db, system_id)
+        if detail is None:
+            continue
+        for body in detail.bodies:
+            if body.id in seen or not body.discovered:
+                continue
+            if phase == "interstellar_cruise" and _distance(probe_point, (body.display_x, body.display_y, body.display_z)) > 30:
+                continue
+            seen.add(body.id)
+            bodies.append(body)
+    return sorted(
+        bodies,
+        key=lambda body: (_distance(probe_point, (body.display_x, body.display_y, body.display_z)), -body.radius_km, body.id),
+    )
+
+
+def _recent_scene_usage(db: Session, limit: int = 3) -> tuple[dict[str, int], dict[str, int]]:
+    recent_logs = db.scalars(select(ExplorationLog).order_by(ExplorationLog.id.desc()).limit(limit)).all()
+    source_age: dict[str, int] = {}
+    category_age: dict[str, int] = {}
+    for age, log in enumerate(recent_logs):
+        for body_id in log.related_body_ids or []:
+            source_age.setdefault(body_id, age)
+        if not log.related_event_ids:
+            continue
+        events = db.scalars(select(SimulationEvent).where(SimulationEvent.id.in_(log.related_event_ids))).all()
+        for event in events:
+            for item in event.data.get("observations", []):
+                source = item.get("source")
+                category = item.get("scene_category")
+                if source:
+                    source_age.setdefault(str(source), age)
+                if category:
+                    category_age.setdefault(str(category), age)
+    return source_age, category_age
+
+
+def _environment_scene_category(item: EnvironmentObjectSpec) -> str:
+    nebula_type = str(item.details.get("nebula_type") or "")
+    if item.object_type == "dust_cloud" or nebula_type == "dark":
+        return "environment:dark_dust"
+    if item.object_type == "nebula":
+        return f"environment:nebula:{nebula_type or 'unknown'}"
+    return f"environment:{item.object_type}"
+
+
+def _body_scene_category(body_type: str) -> str:
+    return f"body:{body_type}"
+
+
+def _passive_environment_observation(item: EnvironmentObjectSpec, reliability: float) -> ObservationFact:
+    nebula_type = str(item.details.get("nebula_type") or "")
+    if item.object_type == "dust_cloud" or nebula_type == "dark":
+        value = f"{item.name}の方向で恒星光の遮蔽と弱い赤化を受動検出した"
+    elif nebula_type == "reflection":
+        value = f"{item.name}から広がる淡い散乱光を受動検出した"
+    elif item.object_type == "nebula":
+        value = f"{item.name}の方向に拡散光と弱い分光上の兆候を捉えた"
+    elif item.object_type == "anomaly_region":
+        value = f"{item.name}の方向で背景光の不規則な変化を受動検出した"
+    else:
+        value = f"{item.name}の方向で弱い散乱光の変化を受動検出した"
+    return ObservationFact(
+        type="passive_sighting",
+        value=value,
+        reliability=max(0.2, reliability * 0.78),
+        sighting_level="detected",
+        source=item.id,
+        distance_hint="航路周辺",
+        object_type=item.object_type,
+        scene_category=_environment_scene_category(item),
+    )
+
+
+def _passive_small_body_observation(layer: SmallBodyLayerSpec, reliability: float) -> ObservationFact:
+    if layer.layer_type == "asteroid_belt":
+        value = f"{layer.name}の方向で断続的な反射光と微小な遮蔽を受動検出した"
+    elif layer.layer_type == "comet_population":
+        value = f"{layer.name}に一時的な散乱光とコマ状の分光上の兆候を捉えた"
+    else:
+        value = f"{layer.name}の球殻方向に希薄な散乱光と遠赤外線側の弱い兆候を受動検出した"
+    return ObservationFact(
+        type="passive_sighting",
+        value=value,
+        reliability=max(0.2, reliability * 0.74),
+        sighting_level="detected",
+        source=layer.id,
+        distance_hint="太陽系小天体領域",
+        object_type=layer.layer_type,
+        scene_category=f"small_body:{layer.layer_type}",
+    )
+
+
+def _passive_body_observation(body: CelestialBody, reliability: float) -> ObservationFact:
+    body_type = body.body_type
+    if body_type == "star":
+        value = f"{body.name}の光に航行に伴う視差変化を記録した"
+    elif body_type in {"rocky_planet", "terrestrial_planet", "gas_giant", "ice_planet", "ice_world", "ocean_world", "dwarf_planet"}:
+        value = f"{body.name}からの弱い反射光と未分離の分光上の兆候を捉えた"
+    elif body_type in {"moon", "satellite"}:
+        value = f"{body.name}の反射光に小さな視差変化を受動検出した"
+    elif body_type == "comet":
+        value = f"{body.name}の方向に断続的な散乱光と弱い分光上の兆候を捉えた"
+    elif body_type in {"asteroid", "asteroid_belt", "debris_belt", "debris_field"}:
+        value = f"{body.name}の方向で断続的な反射光と微小な遮蔽を受動検出した"
+    elif body_type in {"ring", "ring_system", "planetary_ring"}:
+        value = f"{body.name}の方向に薄い散乱光と帯状の遮蔽を受動検出した"
+    else:
+        value = f"{body.name}の方向で弱い光学変化と分光上の兆候を受動検出した"
+    return ObservationFact(
+        type="passive_sighting",
+        value=value,
+        reliability=max(0.2, reliability * 0.82),
+        sighting_level="resolved",
+        source=body.id,
+        distance_hint="近傍天体",
+        body_type=body_type,
+        scene_category=_body_scene_category(body_type),
+    )
+
+
+def _confirmed_body_observation(body: CelestialBody, reliability: float) -> ObservationFact:
+    body_type = body.body_type
+    if body_type == "star":
+        value = f"{body.name}の恒星光を分光観測し、光度分布を確認した"
+    elif body_type in {"rocky_planet", "terrestrial_planet", "dwarf_planet"}:
+        value = f"{body.name}の反射スペクトルと表面の明暗分布を確認した"
+    elif body_type == "gas_giant":
+        value = f"{body.name}の大気帯による色調差と反射スペクトルを確認した"
+    elif body_type in {"ice_planet", "ice_world"}:
+        value = f"{body.name}の高反射領域と低温側の赤外線分布を確認した"
+    elif body_type == "ocean_world":
+        value = f"{body.name}の反射光分布と大気による分光変化を確認した"
+    elif body_type in {"moon", "satellite"}:
+        value = f"{body.name}の位相と表面反射率の差を確認した"
+    elif body_type == "comet":
+        value = f"{body.name}のコマ状散乱光と分光成分を確認した"
+    elif body_type in {"asteroid", "asteroid_belt"}:
+        value = f"{body.name}の断続的な反射光と遮蔽頻度を確認した"
+    elif body_type in {"ring", "ring_system", "planetary_ring"}:
+        value = f"{body.name}の帯状構造による散乱光と遮蔽を確認した"
+    elif body_type in {"debris_belt", "debris_field"}:
+        value = f"{body.name}の不規則な反射光と微小遮蔽の分布を確認した"
+    else:
+        value = f"{body.name} ({body_type}) の角直径と反射光分布を確認した"
+
+    details: list[str] = []
+    spectral_type = body.details.get("spectral_type")
+    temperature = body.details.get("surface_temperature_k")
+    atmosphere = body.details.get("atmosphere")
+    if spectral_type:
+        details.append(f"スペクトル型 {spectral_type}")
+    if isinstance(temperature, int | float):
+        details.append(f"表面温度 {temperature:g} K")
+    if atmosphere:
+        details.append(f"大気情報 {atmosphere}")
+    if details:
+        value = f"{value}（{'、'.join(details)}）"
+    return ObservationFact(
+        type="celestial_body",
+        value=value,
+        reliability=reliability,
+        sighting_level="confirmed",
+        source=body.id,
+        body_type=body_type,
+        scene_category=_body_scene_category(body_type),
+    )
+
+
 def _nearest_side_system(db: Session, probe: Probe, target: StarSystem) -> StarSystem | None:
     probe_point = _vector_from_probe(probe)
     candidates = [
@@ -840,62 +1053,23 @@ def passive_observations_during_move(
     target: StarSystem,
     remaining_before_step: float,
     reliability: float,
+    route_phase: str | None = None,
 ) -> tuple[list[ObservationFact], list[Interpretation]]:
-    target_kind = "航路標の微光" if target.kind == "waypoint" else "恒星光"
-    observations = [
-        ObservationFact(
-            type="passive_sighting",
-            value=f"航路前方に{target.name}の{target_kind}を捉えた",
-            reliability=reliability,
-            sighting_level="detected" if target.kind == "waypoint" else "resolved",
-            source=target.id,
-            distance_hint=f"残距離推定 {remaining_before_step:.1f}",
-        )
-    ]
+    candidates: list[ObservationFact] = []
     interpretations = [
         Interpretation(
             hypothesis="受動観測は航路維持に利用できるが、単独では発見確定には不足している",
             confidence=min(0.82, reliability * 0.72),
         )
     ]
-    probe_radius = _display_radius(_vector_from_probe(probe))
-    if probe.current_system_id != "sol" and probe_radius > 18:
-        observations.append(
-            ObservationFact(
-                type="passive_sighting",
-                value="後方視野で太陽系を淡い白点として分離した",
-                reliability=max(0.2, reliability * 0.88),
-                sighting_level="resolved",
-                source="sol",
-                distance_hint="後方視野",
-            )
-        )
-    elif probe_radius > 9:
-        observations.append(
-            ObservationFact(
-                type="passive_sighting",
-                value="後方視野で太陽系内の光度がゆっくり低下している",
-                reliability=max(0.2, reliability * 0.82),
-                sighting_level="detected",
-                source="sol",
-                distance_hint="後方視野",
-            )
-        )
-    side_system = _nearest_side_system(db, probe, target)
-    if side_system and len(observations) < 3:
-        observations.append(
-            ObservationFact(
-                type="passive_sighting",
-                value=f"側方星野で{side_system.name}の恒星光に視差変化を記録した",
-                reliability=max(0.2, reliability * 0.8),
-                sighting_level="resolved",
-                source=side_system.id,
-                distance_hint="側方視野",
-            )
-        )
+
+    candidates.extend(_passive_environment_observation(item, reliability) for item in _route_environment_objects(db, probe, target))
+    candidates.extend(_passive_small_body_observation(item, reliability) for item in _route_small_body_layers(db, probe, target))
+    candidates.extend(_passive_body_observation(body, reliability) for body in _nearby_route_bodies(db, probe, target, route_phase))
+
     signal = _passive_signal_hint(db, probe, target)
-    if signal and len(observations) < 3:
-        observations.append(
+    if signal:
+        candidates.append(
             ObservationFact(
                 type="passive_signal",
                 value=f"{signal.kind}の微弱な反射を受動検出した",
@@ -903,6 +1077,7 @@ def passive_observations_during_move(
                 sighting_level="detected",
                 source=signal.id,
                 distance_hint="航路周辺",
+                scene_category=f"signal:{signal.kind}",
             )
         )
         interpretations.append(
@@ -911,7 +1086,55 @@ def passive_observations_during_move(
                 confidence=max(0.2, min(0.75, reliability * signal.strength * 0.72)),
             )
         )
-    return observations[:3], interpretations
+
+    side_system = _nearest_side_system(db, probe, target)
+    if side_system:
+        candidates.append(
+            ObservationFact(
+                type="passive_sighting",
+                value=f"側方星野で{side_system.name}の恒星光に視差変化を記録した",
+                reliability=max(0.2, reliability * 0.8),
+                sighting_level="resolved",
+                source=side_system.id,
+                distance_hint="側方視野",
+                scene_category="system:parallax",
+            )
+        )
+
+    source_age, category_age = _recent_scene_usage(db)
+
+    def repetition_key(observation: ObservationFact) -> tuple[int, int, str]:
+        source_recency = source_age.get(observation.source or "", -1)
+        category_recency = category_age.get(observation.scene_category or "", -1)
+        use_ages = [age for age in (source_recency, category_recency) if age >= 0]
+        most_recent_use = min(use_ages, default=-1)
+        return (1 if use_ages else 0, -most_recent_use, observation.source or "")
+
+    selected: list[ObservationFact] = []
+    selected_categories: set[str] = set()
+    for observation in sorted(candidates, key=repetition_key):
+        category = observation.scene_category or observation.type
+        if category in selected_categories:
+            continue
+        selected.append(observation)
+        selected_categories.add(category)
+        if len(selected) == 3:
+            break
+
+    if not selected:
+        target_kind = "航路標の微光" if target.kind == "waypoint" else "恒星光"
+        selected.append(
+            ObservationFact(
+                type="passive_sighting",
+                value=f"航路前方に{target.name}の{target_kind}を捉えた",
+                reliability=reliability,
+                sighting_level="detected" if target.kind == "waypoint" else "resolved",
+                source=target.id,
+                distance_hint=f"残距離推定 {remaining_before_step:.1f}",
+                scene_category="system:route_target",
+            )
+        )
+    return selected, interpretations
 
 
 def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[SimulationEvent, list[ObservationFact], list[Interpretation]]:
@@ -968,6 +1191,7 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
                 target,
                 float(route_state.get("remaining_distance", 0.0)),
                 reliability,
+                str(route_state.get("phase") or nav_state.phase),
             )
             observations.extend(passive_observations)
             interpretations.extend(passive_interpretations)
@@ -979,7 +1203,7 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
         if current and current.bodies:
             for body in current.bodies[:3]:
                 related_body_id = related_body_id or body.id
-                observations.append(ObservationFact(type="celestial_body", value=f"{body.name} ({body.body_type})を確認", reliability=reliability))
+                observations.append(_confirmed_body_observation(body, reliability))
             interpretations.append(Interpretation(hypothesis=f"{current.name}は継続調査に値する安定した観測対象である", confidence=reliability * 0.7))
         probe.energy = max(0, probe.energy - 4)
         probe.storage_used = min(probe.storage_capacity, probe.storage_used + 4)
@@ -1071,11 +1295,12 @@ def apply_action(db: Session, probe: Probe, action: ProposedAction) -> tuple[Sim
     for obs in observations:
         if obs.sighting_level != "confirmed":
             continue
+        observation_body_id = obs.source if obs.source and db.get(CelestialBody, obs.source) is not None else None
         db.add(
             Discovery(
                 probe_id=probe.id,
                 event_id=event.id,
-                target_id=related_signal_id or related_body_id or probe.target_id,
+                target_id=observation_body_id or related_signal_id or related_body_id or probe.target_id,
                 observation_type=obs.type,
                 value=obs.value,
                 reliability=obs.reliability,
@@ -1156,6 +1381,102 @@ def _snapshot_with_event_data(probe: Probe, event: SimulationEvent | None = None
     return snapshot
 
 
+def _related_body_ids(db: Session, event: SimulationEvent, observations: list[ObservationFact]) -> list[str]:
+    candidates = [event.related_body_id, *(observation.source for observation in observations)]
+    result: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in result and db.get(CelestialBody, candidate) is not None:
+            result.append(candidate)
+    return result
+
+
+def _log_scenery_context(
+    db: Session,
+    probe: Probe,
+    event: SimulationEvent,
+    snapshot: dict,
+    observations: list[ObservationFact],
+) -> tuple[list[dict], list[dict], dict]:
+    destination_id = event.data.get("destination_id") or snapshot.get("target_id")
+    target = system_detail(db, str(destination_id)) if destination_id else None
+    probe_view = SimpleNamespace(
+        current_system_id=snapshot.get("current_system_id", probe.current_system_id),
+        display_x=float(snapshot.get("display_x", probe.display_x)),
+        display_y=float(snapshot.get("display_y", probe.display_y)),
+        display_z=float(snapshot.get("display_z", probe.display_z)),
+    )
+
+    body_ids = {observation.source for observation in observations if observation.body_type and observation.source}
+    route_bodies: list[CelestialBody] = []
+    if target is not None:
+        route_bodies = _nearby_route_bodies(db, probe_view, target, event.data.get("route_phase"))
+        body_ids.update(body.id for body in route_bodies[:8])
+    nearby_bodies = []
+    for body_id in sorted(body_ids):
+        body = db.get(CelestialBody, body_id)
+        if body is None:
+            continue
+        nearby_bodies.append(
+            {
+                "id": body.id,
+                "name": body.name,
+                "body_type": body.body_type,
+                "system_id": body.system_id,
+                "radius_km": body.radius_km,
+                "orbit_radius_km": body.orbit_radius_km,
+                "details": body.details,
+            }
+        )
+
+    environment_items = _route_environment_objects(db, probe_view, target) if target is not None else []
+    small_body_items = _route_small_body_layers(db, probe_view, target) if target is not None else []
+    observed_environment_ids = {observation.source for observation in observations if observation.object_type and observation.source}
+    nearby_environment_objects = [
+        {
+            "id": item.id,
+            "name": item.name,
+            "object_type": item.object_type,
+            "nebula_type": item.details.get("nebula_type"),
+            "details": item.details,
+        }
+        for item in environment_items
+        if item.id in observed_environment_ids or len(observed_environment_ids) == 0
+    ]
+    nearby_environment_objects.extend(
+        {
+            "id": item.id,
+            "name": item.name,
+            "object_type": item.layer_type,
+            "inner_radius": item.inner_radius,
+            "outer_radius": item.outer_radius,
+            "details": item.details,
+        }
+        for item in small_body_items
+        if item.id in observed_environment_ids or len(observed_environment_ids) == 0
+    )
+    nearby_environment_objects.sort(key=lambda item: (item["id"] not in observed_environment_ids, item["id"]))
+    nearby_environment_objects = nearby_environment_objects[:8]
+    route_context = {
+        "origin_system_id": event.data.get("origin_system_id") or snapshot.get("current_system_id"),
+        "destination_system_id": destination_id,
+        "destination_name": event.data.get("destination_name") or event.data.get("next_target_name"),
+        "route_phase": event.data.get("route_phase") or event.data.get("navigation_phase"),
+        "remaining_distance": event.data.get("remaining_distance"),
+        "remaining_distance_km": event.data.get("remaining_distance_km"),
+        "remaining_distance_pc": event.data.get("remaining_distance_pc"),
+        "current_speed_m_s": event.data.get("current_speed_m_s"),
+        "position": {
+            "x": snapshot.get("x"),
+            "y": snapshot.get("y"),
+            "z": snapshot.get("z"),
+            "display_x": snapshot.get("display_x"),
+            "display_y": snapshot.get("display_y"),
+            "display_z": snapshot.get("display_z"),
+        },
+    }
+    return nearby_bodies, nearby_environment_objects, route_context
+
+
 async def _persist_log(
     db: Session,
     llm: LLMClient,
@@ -1169,6 +1490,7 @@ async def _persist_log(
     probe = current_probe(db)
     snapshot = snapshot_override or _snapshot_with_event_data(probe, event)
     snapshot["log_number"] = db.query(ExplorationLog).count() + 1
+    nearby_bodies, nearby_environment_objects, route_context = _log_scenery_context(db, probe, event, snapshot, observations)
     generated = await safe_generate_log(
         llm,
         LogContext(
@@ -1216,6 +1538,9 @@ async def _persist_log(
             probe_snapshot=snapshot,
             observations=observations,
             interpretations=interpretations,
+            nearby_bodies=nearby_bodies,
+            nearby_environment_objects=nearby_environment_objects,
+            route_context=route_context,
             prompt_settings=context.prompt_settings,
         ),
     )
@@ -1239,7 +1564,7 @@ async def _persist_log(
             "sim_elapsed_seconds": snapshot.get("sim_elapsed_seconds"),
         },
         related_event_ids=[event.id],
-        related_body_ids=[event.related_body_id] if event.related_body_id else [],
+        related_body_ids=_related_body_ids(db, event, observations),
         probe_state_snapshot=snapshot,
         communication_status="nominal" if snapshot["communication"] > 40 else "degraded",
         reliability=generated.reliability,
@@ -1324,6 +1649,7 @@ async def _persist_pending_navigation_milestones(
         db.add(action)
         db.flush()
         event.action_id = action.id
+        milestone_snapshot = _milestone_snapshot(probe, event)
         observations = [
             ObservationFact(
                 type="navigation",
@@ -1332,6 +1658,24 @@ async def _persist_pending_navigation_milestones(
             )
         ]
         interpretations = [Interpretation(hypothesis="航路計画どおりの進捗を維持している", confidence=0.9)]
+        target = system_detail(db, str(event.data.get("destination_id") or ""))
+        if target is not None:
+            probe_view = SimpleNamespace(
+                current_system_id=milestone_snapshot["current_system_id"],
+                display_x=milestone_snapshot["display_x"],
+                display_y=milestone_snapshot["display_y"],
+                display_z=milestone_snapshot["display_z"],
+            )
+            passive, passive_interpretations = passive_observations_during_move(
+                db,
+                probe_view,
+                target,
+                float(event.data.get("remaining_distance_pc") or 0.0),
+                _sensor_reliability(probe),
+                str(event.data.get("route_phase") or event.data.get("navigation_phase") or "interstellar_cruise"),
+            )
+            observations.extend(passive)
+            interpretations.extend(passive_interpretations)
         event.data = {
             **event.data,
             "observations": [item.model_dump() for item in observations],
@@ -1346,7 +1690,7 @@ async def _persist_pending_navigation_milestones(
                 event,
                 observations,
                 interpretations,
-                snapshot_override=_milestone_snapshot(probe, event),
+                snapshot_override=milestone_snapshot,
             )
         )
     return logs

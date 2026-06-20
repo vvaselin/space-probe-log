@@ -57,7 +57,7 @@ class OpenAICompatibleLLMClient:
         prompts = context.prompt_settings
         data = await self._complete_json(
             "Return only JSON with exactly these keys: title, summary, body_markdown, reliability. "
-            "Use only the mission_clock, simulation_datetime, navigation_state, physical distances, speeds, ETA, position, route, observations, and interpretations present in the payload. "
+            "Use only the mission_clock, simulation_datetime, navigation_state, physical distances, speeds, ETA, position, route, observations, interpretations, nearby_bodies, nearby_environment_objects, and route_context present in the payload. "
             "Do not invent distances, speeds, arrival times, or drive modes; those values are calculated by Python. "
             "Never invent dates or use placeholders like 2024, 2026, XX, or ??. "
             "Write like a quiet first-person navigation journal from OVIS, not a dry report. "
@@ -70,6 +70,8 @@ class OpenAICompatibleLLMClient:
             "detected means the sensor only picked up a faint sign; narrate it as an unconfirmed sighting. "
             "resolved means it matches a known object and can be named. "
             "confirmed means an explicit observe or investigate action verified it. "
+            "Never mention a celestial body or environment object that is absent from observations, nearby_bodies, and nearby_environment_objects. "
+            "Treat passive_sighting and passive_signal only as weak detection, parallax, spectral hints, reflected light, occultation, or scattered light; never promote them to confirmed discoveries. "
             "Do not add unconfirmed world facts, damage, resources, life, or discoveries. "
             "Do not use fixed report sections named '確認済みの事実', 'OVISの解釈', or '記録'. "
             "Prefer the required INSOMNIA navigation-log shape from the style prompt. "

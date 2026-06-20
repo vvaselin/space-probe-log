@@ -34,6 +34,7 @@ def test_map_contains_dynamic_frontier_and_distant_stars() -> None:
     assert payload["map_origin"]["id"] == "earth"
     assert payload["probe"]["specification"]["length_m"] == 18
     assert next(body for body in payload["bodies"] if body["id"] == "earth")["physical_radius_km"] == 6371.0
+    assert next(signal for signal in payload["signals"] if signal["id"] == "signal-sol-001")["body_id"] == "earth"
 
 
 def test_world_reset_starts_with_paused_clock() -> None:
@@ -42,6 +43,14 @@ def test_world_reset_starts_with_paused_clock() -> None:
         clock = client.get("/api/simulation/clock").json()
     assert clock["clock_state"] == "paused"
     assert clock["time_scale"] > 0
+
+
+def test_map_exposes_compact_small_body_layers() -> None:
+    with TestClient(app) as client:
+        client.post("/api/simulation/reset", json={"world_seed": "small-body-map"})
+        payload = client.get("/api/world/map").json()
+    assert [item["layer_type"] for item in payload["small_body_layers"]] == ["asteroid_belt", "comet_population", "oort_cloud"]
+    assert all("positions" not in item for item in payload["small_body_layers"])
 
 
 def test_map_includes_route_prediction_while_probe_is_underway(monkeypatch) -> None:

@@ -62,8 +62,32 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
 
-function emissiveColor(value: unknown, fallback = '#ffd166') {
-  return new THREE.Color(typeof value === 'string' ? value : fallback)
+function seededRandom(seed: number) {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0
+    let value = state
+    value = Math.imul(value ^ (value >>> 15), value | 1)
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function spectralColor(spectralType?: string | null) {
+  const spectralClass = spectralType?.trim().toUpperCase().charAt(0) ?? 'G'
+  return {
+    O: '#9bbcff',
+    B: '#aabfff',
+    A: '#cad7ff',
+    F: '#f8f7ff',
+    G: '#fff4d6',
+    K: '#ffd2a1',
+    M: '#ff9a6b',
+  }[spectralClass] ?? '#fff4d6'
+}
+
+function emissiveColor(value: unknown, spectralType?: string | null) {
+  return new THREE.Color(typeof value === 'string' ? value : spectralColor(spectralType))
 }
 
 function bodyVisualRadius(body: MapPayload['bodies'][number]) {
@@ -185,7 +209,7 @@ onMounted(() => {
     return rockyMaterial
   }
   const lodColorForBody = (body: MapPayload['bodies'][number]) => {
-    if (body.type === 'star') return 0xffefb0
+    if (body.type === 'star') return emissiveColor(body.visual_data?.emissive, body.spectral_type)
     if (body.id === 'earth' || body.object_role === 'origin_body') return 0xc8fff0
     if (body.type === 'gas_giant') return 0xd7e6ff
     if (body.type === 'ice_planet' || body.type === 'ice_world') return 0xe3f2ff
@@ -336,7 +360,90 @@ onMounted(() => {
   )
   scene.add(starPoints)
 
-  const createLodPoint = (position: THREE.Vector3, colorValue = 0xffffff, size = 2.2) => {
+  const smallBodyGeometries: THREE.BufferGeometry[] = []
+  const smallBodyMaterials: THREE.Material[] = []
+  const particleTexture = loadTexture(pickTextureSet('star_blue_01')?.emission)
+  for (const layer of props.payload.small_body_layers ?? []) {
+    const random = seededRandom(layer.seed)
+    const positions: number[] = []
+    const center = vectorFrom(layer.center)
+    if (layer.layer_type === 'asteroid_belt') {
+      for (let index = 0; index < layer.particle_count; index += 1) {
+        const angle = random() * Math.PI * 2
+        const radius = Math.sqrt(layer.inner_radius ** 2 + random() * (layer.outer_radius ** 2 - layer.inner_radius ** 2))
+        positions.push(
+          center.x + Math.cos(angle) * radius,
+          center.y + (random() - 0.5) * layer.thickness,
+          center.z + Math.sin(angle) * radius,
+        )
+      }
+    } else if (layer.layer_type === 'oort_cloud') {
+      for (let index = 0; index < layer.particle_count; index += 1) {
+        const azimuth = random() * Math.PI * 2
+        const cosPolar = random() * 2 - 1
+        const sinPolar = Math.sqrt(1 - cosPolar * cosPolar)
+        const radius = Math.cbrt(layer.inner_radius ** 3 + random() * (layer.outer_radius ** 3 - layer.inner_radius ** 3))
+        positions.push(
+          center.x + Math.cos(azimuth) * sinPolar * radius,
+          center.y + cosPolar * radius,
+          center.z + Math.sin(azimuth) * sinPolar * radius,
+        )
+      }
+    } else if (layer.layer_type === 'comet_population') {
+      const tailPositions: number[] = []
+      for (let index = 0; index < layer.particle_count; index += 1) {
+        const angle = random() * Math.PI * 2
+        const radius = layer.inner_radius + (layer.outer_radius - layer.inner_radius) * random() ** 1.8
+        const position = new THREE.Vector3(
+          center.x + Math.cos(angle) * radius,
+          center.y + (random() - 0.5) * layer.thickness,
+          center.z + Math.sin(angle) * radius,
+        )
+        positions.push(position.x, position.y, position.z)
+        const tailDirection = position.clone().sub(center).normalize()
+        const tailEnd = position.clone().addScaledVector(tailDirection, 1.4 + random() * 1.8)
+        tailPositions.push(position.x, position.y, position.z, tailEnd.x, tailEnd.y, tailEnd.z)
+      }
+      const tailGeometry = new THREE.BufferGeometry()
+      tailGeometry.setAttribute('position', new THREE.Float32BufferAttribute(tailPositions, 3))
+      const tailMaterial = new THREE.LineBasicMaterial({
+        color: layer.visual_data?.tail_color ?? '#8fdcff',
+        transparent: true,
+        opacity: (layer.visual_data?.opacity ?? 0.78) * 0.72,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+      const tails = new THREE.LineSegments(tailGeometry, tailMaterial)
+      tails.userData.label = layer.name
+      scene.add(tails)
+      smallBodyGeometries.push(tailGeometry)
+      smallBodyMaterials.push(tailMaterial)
+    } else {
+      continue
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    const material = new THREE.PointsMaterial({
+      color: layer.visual_data?.color ?? '#cbd5e1',
+      map: particleTexture,
+      size: (layer.visual_data?.point_size ?? 0.06) * 18,
+      transparent: true,
+      opacity: layer.visual_data?.opacity ?? 0.4,
+      alphaTest: 0.04,
+      sizeAttenuation: false,
+      depthWrite: false,
+      blending: layer.layer_type === 'asteroid_belt' ? THREE.NormalBlending : THREE.AdditiveBlending,
+      toneMapped: false,
+    })
+    const points = new THREE.Points(geometry, material)
+    points.userData.label = layer.name
+    scene.add(points)
+    selectable.push(points as unknown as Selectable)
+    smallBodyGeometries.push(geometry)
+    smallBodyMaterials.push(material)
+  }
+
+  const createLodPoint = (position: THREE.Vector3, colorValue: THREE.ColorRepresentation = 0xffffff, size = 2.2) => {
     const geometry = new THREE.BufferGeometry()
     geometry.setAttribute('position', new THREE.Float32BufferAttribute([position.x, position.y, position.z], 3))
     const point = new THREE.Points(
@@ -353,6 +460,28 @@ onMounted(() => {
     point.visible = false
     scene.add(point)
     return point
+  }
+
+  const createDownwardSquarePyramidGeometry = (halfWidth: number, height: number) => {
+    const halfHeight = height / 2
+    const apex = [0, -halfHeight, 0]
+    const corners = [
+      [-halfWidth, halfHeight, -halfWidth],
+      [halfWidth, halfHeight, -halfWidth],
+      [halfWidth, halfHeight, halfWidth],
+      [-halfWidth, halfHeight, halfWidth],
+    ]
+    const positions: number[] = []
+    const addTriangle = (left: number[], middle: number[], right: number[]) => positions.push(...left, ...middle, ...right)
+    for (let index = 0; index < corners.length; index += 1) {
+      addTriangle(apex, corners[index], corners[(index + 1) % corners.length])
+    }
+    addTriangle(corners[0], corners[2], corners[1])
+    addTriangle(corners[0], corners[3], corners[2])
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geometry.computeVertexNormals()
+    return geometry
   }
 
   type StellarLightCandidate = { position: THREE.Vector3; color: THREE.Color; emissionStrength: number }
@@ -398,7 +527,7 @@ onMounted(() => {
   for (const system of props.payload.systems) {
     const isFarObjective = system.object_role === 'far_objective'
     const isWaypoint = system.object_role === 'navigation_waypoint'
-    const starColor = emissiveColor(system.visual_data?.emissive)
+    const starColor = emissiveColor(system.visual_data?.emissive, system.spectral_type)
     const emissionStrength = system.visual_data?.emission_strength ?? 1.25
     const material = isWaypoint
       ? waypointMaterial
@@ -416,7 +545,7 @@ onMounted(() => {
       registerStellarLight(mesh.position, starColor, emissionStrength)
     }
 
-    const ringColor = isWaypoint ? 0xdbeafe : isFarObjective ? 0xffffff : system.has_life ? 0x6df2b2 : 0xffd166
+    const ringColor = isWaypoint ? 0xdbeafe : isFarObjective ? 0xffffff : system.has_life ? 0x6df2b2 : starColor
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(radius + 0.45, radius + 0.6, 64),
       new THREE.MeshBasicMaterial({ color: ringColor, transparent: true, opacity: isWaypoint ? 0.45 : isFarObjective ? 0.62 : 0.3, side: THREE.DoubleSide })
@@ -424,7 +553,7 @@ onMounted(() => {
     ring.position.copy(mesh.position)
     ring.rotation.x = Math.PI / 2
     scene.add(ring)
-    const point = createLodPoint(mesh.position, isWaypoint || isFarObjective ? 0xffffff : 0xf8fbff, isFarObjective || system.id === targetId ? 3.0 : 2.2)
+    const point = createLodPoint(mesh.position, isWaypoint || isFarObjective ? 0xffffff : starColor, isFarObjective || system.id === targetId ? 3.0 : 2.2)
     point.userData.label = mesh.userData.label
     selectable.push(point as unknown as Selectable)
     lodEntries.push({
@@ -437,8 +566,9 @@ onMounted(() => {
     })
   }
 
+  const renderedBodies = new Map<string, { position: THREE.Vector3; radius: number }>()
   for (const body of props.payload.bodies) {
-    const bodyStarColor = emissiveColor(body.visual_data?.emissive)
+    const bodyStarColor = emissiveColor(body.visual_data?.emissive, body.spectral_type)
     const bodyMaterial = body.type === 'star'
       ? createStellarMaterial(bodyStarColor)
       : texturedStandardMaterial(body.visual_data?.texture_key, bodyFallbackMaterial(body))
@@ -448,6 +578,7 @@ onMounted(() => {
     const visualRadius = bodyVisualRadius(body)
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(visualRadius, 24, 16), bodyMaterial)
     mesh.position.set(body.x, body.y, body.z)
+    renderedBodies.set(body.id, { position: mesh.position.clone(), radius: visualRadius })
     mesh.userData.label = `${body.name} / ${body.type}`
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
@@ -485,8 +616,17 @@ onMounted(() => {
   }
 
   for (const signal of props.payload.signals) {
-    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(signal.investigated ? 0.16 : 0.24), signalMaterial)
-    mesh.position.set(signal.x, signal.y, signal.z)
+    const markerHeight = signal.investigated ? 0.28 : 0.4
+    const markerHalfWidth = signal.investigated ? 0.14 : 0.2
+    const mesh = new THREE.Mesh(createDownwardSquarePyramidGeometry(markerHalfWidth, markerHeight), signalMaterial)
+    const linkedBody = signal.body_id ? renderedBodies.get(signal.body_id) : undefined
+    if (linkedBody) {
+      const surfaceGap = Math.max(0.06, linkedBody.radius * 0.04)
+      mesh.position.copy(linkedBody.position)
+      mesh.position.y += linkedBody.radius + surfaceGap + markerHeight / 2
+    } else {
+      mesh.position.set(signal.x, signal.y, signal.z)
+    }
     mesh.userData.label = `${signal.id} / ${signal.kind}`
     scene.add(mesh)
     selectable.push(mesh as unknown as Selectable)
@@ -838,6 +978,8 @@ onMounted(() => {
     renderer.dispose()
     for (const geometry of starGeometries) geometry.dispose()
     for (const material of starPointMaterials) material.dispose()
+    for (const geometry of smallBodyGeometries) geometry.dispose()
+    for (const material of smallBodyMaterials) material.dispose()
     for (const entry of lodEntries) {
       entry.point.geometry.dispose()
       const material = entry.point.material

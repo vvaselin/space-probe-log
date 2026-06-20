@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.time import utcnow
-from app.models import Probe, ProbeNavigationState, SimulationEvent, StarSystem
+from app.models import CelestialBody, Probe, ProbeNavigationState, SimulationEvent, StarSystem
 from app.schemas.domain import DriveMode, NavigationPhase
 from app.services.clock import mission_clock_text
 from app.services.probe_spec import probe_specification
@@ -17,6 +17,8 @@ SYSTEM_ARRIVAL_SECONDS = 5 * 60
 MIN_ACCELERATION_SECONDS = 5 * 60
 MAX_ACCELERATION_SECONDS = 30 * 60
 DRIVE_PROFILE = "instant_high_output_v1"
+DISPLAY_ANCHOR_VERSION = "upper_y_v1"
+DISPLAY_ANCHOR_GAP = 0.06
 NAVIGATION_LOG_MILESTONES = (
     (0.01, "progress_01", "出発後の加速記録"),
     (0.50, "progress_50", "航路中間域の定期観測"),
@@ -60,6 +62,33 @@ def _vector_from_payload(payload: dict | None, fallback: tuple[float, float, flo
         float(payload.get("y", fallback[1])),
         float(payload.get("z", fallback[2])),
     )
+
+
+def rendered_body_radius(body: CelestialBody) -> float:
+    if body.radius_km <= 0:
+        return max(0.24, body.display_radius * 1.05)
+    radius = math.sqrt(body.radius_km / 6_371.0) * 0.24
+    return max(0.08, min(2.55 if body.body_type == "star" else 1.05, radius))
+
+
+def body_upper_display_anchor(body: CelestialBody) -> tuple[float, float, float]:
+    probe_half_length = 0.04
+    clearance = rendered_body_radius(body) + probe_half_length + DISPLAY_ANCHOR_GAP
+    return body.display_x, body.display_y + clearance, body.display_z
+
+
+def navigation_display_anchor(db: Session, target: StarSystem) -> tuple[float, float, float]:
+    if target.kind == "waypoint" or target.details.get("object_role") == "navigation_waypoint":
+        return target.display_x, target.display_y, target.display_z
+    primary_star = db.scalar(
+        select(CelestialBody)
+        .where(CelestialBody.system_id == target.id, CelestialBody.body_type == "star")
+        .order_by(CelestialBody.radius_km.desc(), CelestialBody.id)
+        .limit(1)
+    )
+    if primary_star is None:
+        return target.display_x, target.display_y, target.display_z
+    return body_upper_display_anchor(primary_star)
 
 
 def latest_navigation_state(db: Session, probe: Probe) -> ProbeNavigationState | None:
@@ -122,6 +151,7 @@ def _sync_navigation_spec(state: ProbeNavigationState) -> None:
         "origin_display_position",
         "destination_position_pc",
         "destination_display_position",
+        "display_anchor_version",
     ):
         if key in existing_schedule:
             schedule[key] = existing_schedule[key]
@@ -140,12 +170,18 @@ def begin_navigation(db: Session, probe: Probe, target: StarSystem, simulation_d
     distance_pc = physical_distance_pc(probe, target)
     distance_km = distance_pc * PARSEC_KM
     schedule = _schedule_for_distance(distance_km, spec.cruise_speed_m_s)
+    destination_display = navigation_display_anchor(db, target)
     schedule = {
         **schedule,
         "origin_position_pc": {"x": probe.x, "y": probe.y, "z": probe.z},
         "origin_display_position": {"x": probe.display_x, "y": probe.display_y, "z": probe.display_z},
         "destination_position_pc": {"x": target.x, "y": target.y, "z": target.z},
-        "destination_display_position": {"x": target.display_x, "y": target.display_y, "z": target.display_z},
+        "destination_display_position": {
+            "x": destination_display[0],
+            "y": destination_display[1],
+            "z": destination_display[2],
+        },
+        "display_anchor_version": DISPLAY_ANCHOR_VERSION,
     }
     state = ProbeNavigationState(
         probe_id=probe.id,

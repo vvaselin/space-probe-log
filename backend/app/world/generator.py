@@ -58,6 +58,21 @@ class EnvironmentObjectSpec:
     details: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SmallBodyLayerSpec:
+    id: str
+    name: str
+    layer_type: str
+    center: tuple[float, float, float]
+    inner_radius: float
+    outer_radius: float
+    thickness: float
+    particle_count: int
+    seed: int
+    visual_data: dict[str, Any]
+    details: dict[str, Any] = field(default_factory=dict)
+
+
 def stable_seed(*parts: object) -> int:
     digest = hashlib.sha256(":".join(str(part) for part in parts).encode("utf-8")).hexdigest()
     return int(digest[:16], 16)
@@ -319,6 +334,7 @@ def fictional_system(world_seed: str, index: int, coordinate: tuple[int, int, in
     display = (x * 18, y * 18, z * 18)
     star_radius = rng.uniform(250_000, 900_000)
     planet_count = rng.randint(2, 5)
+    spectral_type = rng.choice(["K", "G", "M", "F", "A"])
     bodies = [
         BodySpec(
             id=f"{name.lower()}-star",
@@ -329,7 +345,7 @@ def fictional_system(world_seed: str, index: int, coordinate: tuple[int, int, in
             sim=(x, y, z),
             display=display,
             display_radius=rng.uniform(1.2, 2.1),
-            details={"spectral_type": rng.choice(["K", "G", "M", "F"]), "fictional": True, "visual_data": {"texture_key": "star_yellow_01"}},
+            details={"spectral_type": spectral_type, "fictional": True, "visual_data": stellar_visual_data(spectral_type)},
         )
     ]
     for planet_index in range(planet_count):
@@ -376,7 +392,13 @@ def fictional_system(world_seed: str, index: int, coordinate: tuple[int, int, in
         generated_seed=str(seed),
         has_life=rng.random() > 0.65,
         resources={"water_ice": round(rng.uniform(0, 30), 2), "rare_metals": round(rng.uniform(0, 12), 2)},
-        details={"star": bodies[0].details, "coordinate": list(coordinate), "object_role": "nearby_system", "navigation_order": 10 + index},
+        details={
+            "star": bodies[0].details,
+            "coordinate": list(coordinate),
+            "object_role": "nearby_system",
+            "navigation_order": 10 + index,
+            "visual_data": stellar_visual_data(spectral_type),
+        },
         bodies=bodies,
         signals=signals,
     )
@@ -425,7 +447,12 @@ def frontier_system(
             sim=(x, y, z),
             display=display,
             display_radius=rng.uniform(1.1, 2.0),
-            details={"spectral_type": spectral_type, "mass_solar": star_mass, "fictional": True},
+            details={
+                "spectral_type": spectral_type,
+                "mass_solar": star_mass,
+                "fictional": True,
+                "visual_data": stellar_visual_data(spectral_type),
+            },
         )
     ]
     for planet_index in range(planet_count):
@@ -486,6 +513,7 @@ def frontier_system(
         },
         details={
             "star": bodies[0].details,
+            "visual_data": stellar_visual_data(spectral_type),
             "object_role": "frontier_system",
             "navigation_order": 120 + ring * 10 + slot,
             "frontier_ring": ring,
@@ -642,6 +670,50 @@ def generated_environment_objects(world_seed: str, systems_in: list[SystemSpec],
     return objects
 
 
+def generated_small_body_layers(world_seed: str) -> list[SmallBodyLayerSpec]:
+    return [
+        SmallBodyLayerSpec(
+            id="solar-asteroid-belt",
+            name="Main Asteroid Belt",
+            layer_type="asteroid_belt",
+            center=(0.0, 0.0, 0.0),
+            inner_radius=14.0,
+            outer_radius=20.0,
+            thickness=1.2,
+            particle_count=1_200,
+            seed=stable_seed(world_seed, "small-body", "asteroid-belt") & 0xFFFFFFFF,
+            visual_data={"color": "#b8ad9e", "opacity": 0.58, "point_size": 0.075},
+            details={"source": "generated", "distribution": "annular_disk", "region": "solar_system"},
+        ),
+        SmallBodyLayerSpec(
+            id="solar-comet-population",
+            name="Long-period Comet Population",
+            layer_type="comet_population",
+            center=(0.0, 0.0, 0.0),
+            inner_radius=10.0,
+            outer_radius=65.0,
+            thickness=18.0,
+            particle_count=6 + stable_seed(world_seed, "small-body", "comet-count") % 5,
+            seed=stable_seed(world_seed, "small-body", "comets") & 0xFFFFFFFF,
+            visual_data={"color": "#d9f4ff", "tail_color": "#8fdcff", "opacity": 0.78, "point_size": 0.16},
+            details={"source": "generated", "distribution": "inclined_eccentric", "region": "solar_system"},
+        ),
+        SmallBodyLayerSpec(
+            id="solar-oort-cloud",
+            name="Oort Cloud",
+            layer_type="oort_cloud",
+            center=(0.0, 0.0, 0.0),
+            inner_radius=80.0,
+            outer_radius=180.0,
+            thickness=100.0,
+            particle_count=3_500,
+            seed=stable_seed(world_seed, "small-body", "oort-cloud") & 0xFFFFFFFF,
+            visual_data={"color": "#a9c8df", "opacity": 0.2, "point_size": 0.055},
+            details={"source": "generated", "distribution": "spherical_shell", "region": "solar_system", "visibility": "enhanced"},
+        ),
+    ]
+
+
 def _slug(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "-" for char in value).strip("-").replace("--", "-")
 
@@ -663,13 +735,28 @@ def _stellar_spectral_hint(obj: dict[str, Any]) -> str:
     return "M"
 
 
+def stellar_visual_data(spectral_type: str | None, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    spectral_class = str(spectral_type or "G").strip().upper()[:1]
+    profiles = {
+        "O": ("#9bbcff", "star_blue_01", 1.8),
+        "B": ("#aabfff", "star_blue_01", 1.65),
+        "A": ("#cad7ff", "star_blue_01", 1.5),
+        "F": ("#f8f7ff", "star_yellow_01", 1.35),
+        "G": ("#fff4d6", "star_yellow_01", 1.25),
+        "K": ("#ffd2a1", "star_red_01", 1.15),
+        "M": ("#ff9a6b", "star_red_01", 1.05),
+    }
+    emissive, texture_key, emission_strength = profiles.get(spectral_class, profiles["G"])
+    return {
+        **(existing or {}),
+        "texture_key": texture_key,
+        "emissive": emissive,
+        "emission_strength": emission_strength,
+    }
+
+
 def _star_texture_key(obj: dict[str, Any]) -> str:
-    spectral = _stellar_spectral_hint(obj)
-    if spectral in {"A", "B", "O"}:
-        return "star_blue_01"
-    if spectral in {"K", "M"}:
-        return "star_red_01"
-    return "star_yellow_01"
+    return str(stellar_visual_data(_stellar_spectral_hint(obj))["texture_key"])
 
 
 def _body_texture_key(body_type: str) -> str:

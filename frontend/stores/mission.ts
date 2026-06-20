@@ -20,6 +20,7 @@ export const useMissionStore = defineStore('mission', () => {
   const latestGeneratedLog = ref<LogListItem | null>(null)
   const api = useApi()
   let dashboardRefresh: Promise<void> | null = null
+  let resetRequest: Promise<void> | null = null
 
   const isAdmin = computed(() => Boolean(adminSession.value?.authenticated))
 
@@ -174,8 +175,17 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function startCruise() {
+    const needsInitialRoute = (probe.value?.mission_time ?? 0) === 0 && !probe.value?.target_id
     const updatedClock = await api.updateClock({ time_scale: cruiseTimeScale(), clock_state: 'running' }, adminToken())
     applyClockSnapshot(updatedClock)
+    if (needsInitialRoute) {
+      const initialTick = await api.tick(adminToken())
+      lastEvent.value = initialTick.event
+      if (dashboardRefresh) await dashboardRefresh
+      await refreshDashboard()
+      sceneRevision.value += 1
+      return
+    }
     await refreshDashboard()
   }
 
@@ -218,9 +228,22 @@ export const useMissionStore = defineStore('mission', () => {
   }
 
   async function reset() {
-    await api.reset(adminToken())
-    await loadAll()
-    sceneRevision.value += 1
+    if (resetRequest) return resetRequest
+    loading.value = true
+    error.value = null
+    resetRequest = (async () => {
+      try {
+        await api.reset(adminToken())
+        await loadAll()
+        sceneRevision.value += 1
+      } catch (err) {
+        error.value = err instanceof Error ? err.message : 'リセットに失敗しました'
+      } finally {
+        loading.value = false
+        resetRequest = null
+      }
+    })()
+    return resetRequest
   }
 
   return {

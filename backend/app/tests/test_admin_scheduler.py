@@ -115,4 +115,8 @@ def test_scheduler_lease_is_exclusive_and_can_fail_over(monkeypatch) -> None:
         lease.lease_expires_at = utcnow() - timedelta(seconds=1)
         db.commit()
     assert scheduler.acquire_scheduler_lease("owner-b") is True
+    with TestingSession() as db:
+        scheduler.clear_scheduler_lease(db)
+        db.commit()
+    assert scheduler.acquire_scheduler_lease("owner-c") is True
     engine.dispose()

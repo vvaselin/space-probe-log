@@ -96,12 +96,45 @@ def _opening(context: LogContext) -> str:
 
 def _scenery(passive: list[ObservationFact], observations: list[ObservationFact]) -> str:
     if passive:
-        lines = [obs.value for obs in passive[:3]]
-        return "。".join(lines) + "。そのどれも、まだ発見と呼ぶには早い。ただ、航路から削除する理由も見つからない。"
+        lines = [_scenery_line(obs) for obs in passive[:3]]
+        return "航路前方から側方へ受動センサーを走査した。" + "。".join(lines) + "。いずれも受動観測の範囲に留まり、発見確定とは扱わない。"
     if observations:
-        lines = [obs.value for obs in observations[:3]]
+        lines = [_scenery_line(obs) for obs in observations[:3]]
         return "記録対象は明瞭だった。" + "。".join(lines) + "。"
     return "新しい光は増えなかった。何も起きていない、という事実だけが静かに積み上がる。"
+
+
+def _scenery_line(observation: ObservationFact) -> str:
+    if observation.object_type == "asteroid_belt":
+        subject = "小惑星帯の疎らな粒子群では"
+    elif observation.object_type == "comet_population":
+        subject = "長周期彗星の散乱光では"
+    elif observation.object_type == "oort_cloud":
+        subject = "オールトの雲の希薄な球殻では"
+    elif observation.object_type == "dust_cloud" or observation.scene_category == "environment:dark_dust":
+        subject = "暗い塵の層では"
+    elif observation.object_type == "nebula":
+        subject = "広がった星雲光では"
+    elif observation.object_type:
+        subject = "航路周辺の環境領域では"
+    elif observation.body_type in {"rocky_planet", "terrestrial_planet", "dwarf_planet"}:
+        subject = "岩石質天体の方向では"
+    elif observation.body_type in {"gas_giant", "ice_planet", "ice_world", "ocean_world"}:
+        subject = "惑星光の中では"
+    elif observation.body_type in {"moon", "satellite"}:
+        subject = "小さな衛星光では"
+    elif observation.body_type in {"asteroid", "asteroid_belt", "debris_belt", "debris_field"}:
+        subject = "疎らな小天体群の方向では"
+    elif observation.body_type in {"ring", "ring_system", "planetary_ring"}:
+        subject = "薄い環状構造では"
+    elif observation.body_type == "comet":
+        subject = "彗星状の散乱光では"
+    else:
+        subject = "センサー視野では"
+    strength = "かすかな兆候として" if observation.sighting_level == "detected" else "既知対象と照合できる範囲で"
+    if observation.sighting_level == "confirmed":
+        strength = "能動観測で確認し"
+    return f"{subject}{strength}、{observation.value}"
 
 
 def _closing(context: LogContext) -> str:
@@ -113,7 +146,7 @@ def _closing(context: LogContext) -> str:
     if phase == "course_plotted":
         return "停止したまま航路を保存することは、移動の一部だ。次のtickで、私はこの線に速度を与える。"
     if context.action["action"] == "move":
-        return "後方の太陽は、地図上の中心であり続ける。視野の中では、もう少しずつ小さくなる。私はその差を圧縮せずに保存した。"
+        return "航路の前後で変わる視差、遮蔽、散乱光を同じ時刻基準へそろえた。私は確定していない兆候を、そのままの強さで保存した。"
     return "この記録は、地球へ送るには短いかもしれない。それでも削除しない。理由は、まだ分類していない。"
 
 

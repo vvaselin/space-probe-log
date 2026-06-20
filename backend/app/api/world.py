@@ -8,12 +8,30 @@ from app.models import CelestialBody, Signal, SimulationAction
 from app.repositories.read import active_universe, route_points, system_detail, systems
 from app.schemas.domain import MapPayload, SystemDetail, SystemRead
 from app.services.clock import ensure_simulation_clock
-from app.services.navigation import latest_navigation_state, navigation_payload
+from app.services.navigation import latest_navigation_state, navigation_display_anchor, navigation_payload
 from app.services.probe_spec import probe_specification
-from app.services.simulation import display_probe_offset, ensure_probe, main_route_target
-from app.world.generator import generated_environment_objects, real_data_epoch, stable_seed
+from app.services.simulation import ensure_probe, main_route_target
+from app.world.generator import generated_environment_objects, generated_small_body_layers, real_data_epoch, stable_seed, stellar_visual_data
 
 router = APIRouter(prefix="/api/world", tags=["world"])
+
+
+def _body_visual_data(body: CelestialBody) -> dict:
+    visual_data = body.details.get("visual_data", {})
+    if body.body_type != "star":
+        return visual_data
+    return stellar_visual_data(body.details.get("spectral_type"), visual_data)
+
+
+def _system_stellar_data(system, star_body: CelestialBody | None) -> tuple[str | None, dict]:
+    star_details = system.details.get("star", {})
+    spectral_type = star_body.details.get("spectral_type") if star_body else star_details.get("spectral_type")
+    visual_data = system.details.get("visual_data", {})
+    if star_body is not None:
+        visual_data = {**_body_visual_data(star_body), **visual_data}
+    if spectral_type or star_body is not None:
+        visual_data = stellar_visual_data(spectral_type, visual_data)
+    return spectral_type, visual_data
 
 
 def distant_stars(world_seed: str, count: int = 760) -> list[dict]:
@@ -60,7 +78,12 @@ def get_map(db: Session = Depends(get_db)):
     world_seed = universe.world_seed if universe else "sol-neighborhood-001"
     all_systems = systems(db)
     environment_objects = generated_environment_objects(world_seed, all_systems)
+    small_body_layers = generated_small_body_layers(world_seed)
     bodies = db.query(CelestialBody).all()
+    star_bodies_by_system = {body.system_id: body for body in bodies if body.body_type == "star"}
+    stellar_data_by_system = {
+        system.id: _system_stellar_data(system, star_bodies_by_system.get(system.id)) for system in all_systems
+    }
     signals = db.query(Signal).all()
     earth = next((body for body in bodies if body.id == "earth"), None)
     target = system_detail(db, probe.target_id) if probe.target_id else None
@@ -76,7 +99,7 @@ def get_map(db: Session = Depends(get_db)):
     }
     prediction = None
     if target:
-        target_display = display_probe_offset(target)
+        target_display = navigation_display_anchor(db, target)
         prediction = {
             "target_id": target.id,
             "target_name": target.name,
@@ -85,7 +108,7 @@ def get_map(db: Session = Depends(get_db)):
         }
     primary_prediction = None
     if primary_target and primary_target.id != probe.current_system_id:
-        primary_display = display_probe_offset(primary_target)
+        primary_display = navigation_display_anchor(db, primary_target)
         primary_prediction = {
             "target_id": primary_target.id,
             "target_name": primary_target.name,
@@ -106,7 +129,8 @@ def get_map(db: Session = Depends(get_db)):
                 "kind": item.kind,
                 "object_role": item.details.get("object_role", "system"),
                 "source": item.details.get("source", "generated"),
-                "visual_data": item.details.get("visual_data", {}),
+                "spectral_type": stellar_data_by_system[item.id][0],
+                "visual_data": stellar_data_by_system[item.id][1],
             }
             for item in all_systems
         ],
@@ -126,7 +150,8 @@ def get_map(db: Session = Depends(get_db)):
                 "display_radius": item.display_radius,
                 "object_role": "origin_body" if item.id == "earth" else "body",
                 "source": item.details.get("source", "generated"),
-                "visual_data": item.details.get("visual_data", {}),
+                "spectral_type": item.details.get("spectral_type") if item.body_type == "star" else None,
+                "visual_data": _body_visual_data(item),
             }
             for item in bodies
         ],
@@ -134,6 +159,7 @@ def get_map(db: Session = Depends(get_db)):
             {
                 "id": item.id,
                 "system_id": item.system_id,
+                "body_id": item.body_id,
                 "kind": item.kind,
                 "x": item.display_x,
                 "y": item.display_y,
@@ -159,6 +185,22 @@ def get_map(db: Session = Depends(get_db)):
                 "details": item.details,
             }
             for item in environment_objects
+        ],
+        "small_body_layers": [
+            {
+                "id": item.id,
+                "name": item.name,
+                "layer_type": item.layer_type,
+                "center": {"x": item.center[0], "y": item.center[1], "z": item.center[2]},
+                "inner_radius": item.inner_radius,
+                "outer_radius": item.outer_radius,
+                "thickness": item.thickness,
+                "particle_count": item.particle_count,
+                "seed": item.seed,
+                "visual_data": item.visual_data,
+                "details": item.details,
+            }
+            for item in small_body_layers
         ],
         "probe": {
             "id": probe.id,

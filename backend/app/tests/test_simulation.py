@@ -5,14 +5,16 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import app.services.clock as clock_service
+import app.services.simulation as simulation_service
 from app.llm.mock import MockLLMClient
-from app.models import Discovery, ExplorationLog, ProbeStateHistory, Signal, SimulationAction, SimulationEvent, StarSystem
+from app.models import CelestialBody, Discovery, ExplorationLog, ProbeStateHistory, Signal, SimulationAction, SimulationEvent, StarSystem
 from app.repositories.read import logs as read_logs, system_detail
-from app.schemas.domain import ProposedAction
+from app.schemas.domain import ObservationFact, ProposedAction
 from app.services.action_validation import validate_action
 from app.services.navigation import begin_navigation, synchronize_navigation
 from app.services.reset import reset_world
-from app.services.simulation import _display_radius, _main_route_target, apply_action, run_step, run_tick
+from app.services.simulation import _confirmed_body_observation, _display_radius, _main_route_target, apply_action, run_step, run_tick
+from app.world.generator import EnvironmentObjectSpec
 
 
 class InvalidTargetLLMClient(MockLLMClient):
@@ -23,6 +25,15 @@ class InvalidTargetLLMClient(MockLLMClient):
 class WaitLLMClient(MockLLMClient):
     async def propose_action(self, context):
         return ProposedAction(action="wait", reason="test wait")
+
+
+class CaptureLogContextClient(MockLLMClient):
+    def __init__(self) -> None:
+        self.log_context = None
+
+    async def generate_log(self, context):
+        self.log_context = context
+        return await super().generate_log(context)
 
 
 def add_legacy_outer_lighthouse(db, probe) -> StarSystem:
@@ -467,3 +478,171 @@ async def test_underway_step_keeps_existing_target(db) -> None:
 def test_invalid_llm_shape_rejected_by_pydantic() -> None:
     with pytest.raises(Exception):
         ProposedAction.model_validate({"action": "invent_life", "target_id": "x", "reason": "bad"})
+
+
+def _test_body(body_type: str) -> CelestialBody:
+    return CelestialBody(
+        id=f"test-{body_type}",
+        system_id="sol",
+        name=f"Test {body_type}",
+        body_type=body_type,
+        orbit_radius_km=1.0,
+        radius_km=10.0,
+        sim_x=0.0,
+        sim_y=0.0,
+        sim_z=0.0,
+        display_x=0.0,
+        display_y=0.0,
+        display_z=0.0,
+        display_radius=1.0,
+        discovered=True,
+        details={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("body_type", "expected"),
+    [
+        ("terrestrial_planet", "反射スペクトル"),
+        ("gas_giant", "大気帯"),
+        ("moon", "位相"),
+        ("asteroid", "遮蔽頻度"),
+        ("asteroid_belt", "遮蔽頻度"),
+        ("comet", "コマ状散乱光"),
+        ("ring_system", "帯状構造"),
+        ("debris_belt", "微小遮蔽"),
+    ],
+)
+def test_confirmed_body_observation_varies_by_body_type(body_type: str, expected: str) -> None:
+    observation = _confirmed_body_observation(_test_body(body_type), 0.9)
+    assert observation.sighting_level == "confirmed"
+    assert observation.source == f"test-{body_type}"
+    assert observation.body_type == body_type
+    assert expected in observation.value
+
+
+def test_observe_uses_real_current_system_bodies_with_confirmed_sources(db) -> None:
+    probe = reset_world(db)
+    current = system_detail(db, probe.current_system_id)
+    _, observations, _ = apply_action(db, probe, ProposedAction(action="observe", target_id=current.id, reason="test"))
+    expected_ids = {body.id for body in current.bodies}
+    body_observations = [item for item in observations if item.type == "celestial_body"]
+    assert body_observations
+    assert all(item.sighting_level == "confirmed" for item in body_observations)
+    assert all(item.source in expected_ids for item in body_observations)
+
+
+def test_passive_environment_sightings_only_use_generated_route_objects(db, monkeypatch) -> None:
+    probe = reset_world(db)
+    target = system_detail(db, "outer-solar-marker")
+    near = EnvironmentObjectSpec(
+        id="env-near",
+        name="Route Veil",
+        object_type="nebula",
+        position=(0.0, 0.0, 0.0),
+        display=(probe.display_x, probe.display_y, probe.display_z),
+        scale=(10.0, 10.0, 10.0),
+        rotation=(0.0, 0.0, 0.0),
+        details={"nebula_type": "reflection"},
+    )
+    far = EnvironmentObjectSpec(
+        id="env-far",
+        name="Far Veil",
+        object_type="nebula",
+        position=(0.0, 0.0, 0.0),
+        display=(9999.0, 9999.0, 9999.0),
+        scale=(1.0, 1.0, 1.0),
+        rotation=(0.0, 0.0, 0.0),
+        details={"nebula_type": "emission"},
+    )
+    monkeypatch.setattr(simulation_service, "generated_environment_objects", lambda *_: [near, far])
+    monkeypatch.setattr(simulation_service, "generated_small_body_layers", lambda *_: [])
+    monkeypatch.setattr(simulation_service, "_nearby_route_bodies", lambda *_: [])
+    monkeypatch.setattr(simulation_service, "_passive_signal_hint", lambda *_: None)
+    monkeypatch.setattr(simulation_service, "_nearest_side_system", lambda *_: None)
+    observations, _ = simulation_service.passive_observations_during_move(db, probe, target, 1.0, 0.9)
+    assert [item.source for item in observations] == ["env-near"]
+    assert observations[0].object_type == "nebula"
+    assert observations[0].sighting_level == "detected"
+
+
+def test_recent_scene_category_is_not_selected_first(db, monkeypatch) -> None:
+    probe = reset_world(db)
+    event = SimulationEvent(
+        probe_id=probe.id,
+        event_type="move",
+        mission_time=1,
+        summary="recent",
+        data={"observations": [ObservationFact(type="passive_sighting", value="old", reliability=0.8, sighting_level="detected", source="env-nebula", scene_category="environment:nebula:emission").model_dump()]},
+    )
+    db.add(event)
+    db.flush()
+    db.add(
+        ExplorationLog(
+            title="recent",
+            summary="recent",
+            body_markdown="recent",
+            mission_time=1,
+            probe_position={},
+            related_event_ids=[event.id],
+            related_body_ids=[],
+            probe_state_snapshot={},
+        )
+    )
+    db.flush()
+    nebula = EnvironmentObjectSpec("env-nebula", "Nebula", "nebula", (0, 0, 0), (0, 0, 0), (50, 50, 50), (0, 0, 0), {"nebula_type": "emission"})
+    dust = EnvironmentObjectSpec("env-dust", "Dust", "dust_cloud", (0, 0, 0), (0, 0, 0), (50, 50, 50), (0, 0, 0), {"nebula_type": "dark"})
+    monkeypatch.setattr(simulation_service, "generated_environment_objects", lambda *_: [nebula, dust])
+    monkeypatch.setattr(simulation_service, "_nearby_route_bodies", lambda *_: [])
+    monkeypatch.setattr(simulation_service, "_passive_signal_hint", lambda *_: None)
+    monkeypatch.setattr(simulation_service, "_nearest_side_system", lambda *_: None)
+    target = system_detail(db, "outer-solar-marker")
+    observations, _ = simulation_service.passive_observations_during_move(db, probe, target, 1.0, 0.9)
+    assert observations[0].source == "env-dust"
+
+
+@pytest.mark.asyncio
+async def test_log_context_contains_scenery_and_related_body_ids(db) -> None:
+    reset_world(db)
+    client = CaptureLogContextClient()
+    _, event, log, _ = await run_step(db, client)
+    assert client.log_context is not None
+    assert isinstance(client.log_context.nearby_bodies, list)
+    assert isinstance(client.log_context.nearby_environment_objects, list)
+    assert client.log_context.route_context["destination_system_id"] == "outer-solar-marker"
+    observed_body_ids = {
+        item["source"]
+        for item in event.data["observations"]
+        if item.get("body_type") and item.get("source")
+    }
+    assert observed_body_ids.issubset(set(log.related_body_ids))
+
+
+def test_small_body_route_candidates_require_shell_intersection(db) -> None:
+    reset_world(db, "small-body-route")
+    target = SimpleNamespace(display_x=200.0, display_y=0.0, display_z=0.0)
+    probe = SimpleNamespace(display_x=0.0, display_y=0.0, display_z=0.0)
+    intersecting = simulation_service._route_small_body_layers(db, probe, target)
+    assert [item.layer_type for item in intersecting] == ["asteroid_belt", "comet_population", "oort_cloud"]
+
+    high_probe = SimpleNamespace(display_x=0.0, display_y=250.0, display_z=0.0)
+    high_target = SimpleNamespace(display_x=200.0, display_y=250.0, display_z=0.0)
+    assert simulation_service._route_small_body_layers(db, high_probe, high_target) == []
+
+
+@pytest.mark.parametrize(
+    ("layer_type", "expected"),
+    [
+        ("asteroid_belt", "微小な遮蔽"),
+        ("comet_population", "コマ状"),
+        ("oort_cloud", "遠赤外線"),
+    ],
+)
+def test_small_body_layers_create_weak_passive_observations(layer_type: str, expected: str) -> None:
+    layer = next(item for item in simulation_service.generated_small_body_layers("small-body-observation") if item.layer_type == layer_type)
+    observation = simulation_service._passive_small_body_observation(layer, 0.9)
+    assert observation.type == "passive_sighting"
+    assert observation.sighting_level == "detected"
+    assert observation.source == layer.id
+    assert observation.object_type == layer_type
+    assert expected in observation.value

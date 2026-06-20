@@ -86,6 +86,7 @@ export interface MapPayload {
     has_life: boolean
     kind?: string
     object_role?: string
+    spectral_type?: string | null
     source?: 'jpl_horizons' | 'nasa_exoplanet_archive' | 'generated' | 'manual' | string
     visual_data?: {
       texture_key?: string
@@ -117,6 +118,7 @@ export interface MapPayload {
     physical_radius_km?: number
     display_radius?: number
     object_role?: string
+    spectral_type?: string | null
     source?: 'jpl_horizons' | 'nasa_exoplanet_archive' | 'generated' | 'manual' | string
     visual_data?: {
       texture_key?: string
@@ -136,7 +138,17 @@ export interface MapPayload {
       }
     }
   }>
-  signals: Array<{ id: string; system_id: string; kind: string; x: number; y: number; z: number; investigated: boolean; object_role?: string }>
+  signals: Array<{
+    id: string
+    system_id: string
+    body_id: string | null
+    kind: string
+    x: number
+    y: number
+    z: number
+    investigated: boolean
+    object_role?: string
+  }>
   environment_objects?: Array<{
     id: string
     name: string
@@ -154,6 +166,24 @@ export interface MapPayload {
       opacity?: number
       emission_strength?: number
       emissive?: string
+    }
+    details?: Record<string, unknown>
+  }>
+  small_body_layers?: Array<{
+    id: string
+    name: string
+    layer_type: 'asteroid_belt' | 'comet_population' | 'oort_cloud' | string
+    center: { x: number; y: number; z: number }
+    inner_radius: number
+    outer_radius: number
+    thickness: number
+    particle_count: number
+    seed: number
+    visual_data?: {
+      color?: string
+      tail_color?: string
+      opacity?: number
+      point_size?: number
     }
     details?: Record<string, unknown>
   }>

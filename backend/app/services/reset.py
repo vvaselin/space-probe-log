@@ -20,13 +20,20 @@ from app.models import (
     Universe,
 )
 from app.repositories.settings import load_prompt_defaults
+from app.schemas.domain import ClockState
 from app.services.clock import reset_simulation_clock
+from app.services.navigation import body_upper_display_anchor
 from app.services.probe_spec import PROBE_ID, PROBE_NAME
 from app.services.snapshots import probe_snapshot
 from app.world.generator import generate_world
 
 
-def reset_world(db: Session, world_seed: str | None = None) -> Probe:
+def reset_world(
+    db: Session,
+    world_seed: str | None = None,
+    *,
+    clock_state: ClockState = ClockState.running,
+) -> Probe:
     requested_seed = (world_seed or "").strip()
     seed = requested_seed or f"reset-{utcnow().isoformat()}"
     for model in [
@@ -113,6 +120,7 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
 
     db.flush()
     earth = db.get(CelestialBody, "earth")
+    earth_display_anchor = body_upper_display_anchor(earth) if earth else (7.1, 0.2, 0.0)
     probe = Probe(
         id=PROBE_ID,
         name=PROBE_NAME,
@@ -122,9 +130,9 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         x=earth.sim_x if earth else 1.0,
         y=earth.sim_y if earth else 0.03,
         z=earth.sim_z if earth else 0.17,
-        display_x=earth.display_x if earth else 7.1,
-        display_y=earth.display_y if earth else 0.2,
-        display_z=earth.display_z if earth else 0.0,
+        display_x=earth_display_anchor[0],
+        display_y=earth_display_anchor[1],
+        display_z=earth_display_anchor[2],
         velocity=0.0,
         energy=100.0,
         fuel=100.0,
@@ -140,7 +148,7 @@ def reset_world(db: Session, world_seed: str | None = None) -> Probe:
         mission_time=0,
     )
     db.add(probe)
-    reset_simulation_clock(db)
+    reset_simulation_clock(db, clock_state=clock_state)
 
     probe_profile, action_policy, log_writer_style = load_prompt_defaults()
     db.add(PromptSettings(id=1, probe_profile=probe_profile, action_policy=action_policy, log_writer_style=log_writer_style))

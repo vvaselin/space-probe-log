@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,7 @@ from app.db.base import Base
 from app.db.session import engine
 from app.services.scheduler import run_simulation_scheduler
 
+LOGGER = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -46,9 +48,19 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        LOGGER.exception("Unhandled API error for %s %s", request.method, request.url.path, exc_info=exc)
+        headers = {}
+        origin = request.headers.get("origin")
+        if origin and origin in settings.cors_origin_list:
+            headers = {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Vary": "Origin",
+            }
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error", "error": exc.__class__.__name__},
+            headers=headers,
         )
 
     return app

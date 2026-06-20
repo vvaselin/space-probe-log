@@ -1,4 +1,12 @@
-from app.world.generator import _manual_solar_system, frontier_shell_systems, generate_world, generated_environment_objects, solar_system
+from app.world.generator import (
+    _manual_solar_system,
+    frontier_shell_systems,
+    generate_world,
+    generated_environment_objects,
+    generated_small_body_layers,
+    solar_system,
+    stellar_visual_data,
+)
 
 
 def simplified(seed: str) -> list[tuple[str, str, tuple[float, float, float], str]]:
@@ -11,6 +19,31 @@ def test_same_seed_generates_same_systems() -> None:
 
 def test_different_seed_changes_fictional_systems() -> None:
     assert simplified("alpha")[1:] != simplified("beta")[1:]
+
+
+def test_stellar_visual_data_varies_by_spectral_class() -> None:
+    blue = stellar_visual_data("A0V")
+    yellow_white = stellar_visual_data("G2V")
+    red = stellar_visual_data("M5V")
+    assert blue["texture_key"] == "star_blue_01"
+    assert yellow_white["texture_key"] == "star_yellow_01"
+    assert red["texture_key"] == "star_red_01"
+    assert len({blue["emissive"], yellow_white["emissive"], red["emissive"]}) == 3
+    assert blue["emission_strength"] > red["emission_strength"]
+
+
+def test_generated_stars_include_spectral_visual_profiles() -> None:
+    stars = [
+        body
+        for system in generate_world("stellar-colors")
+        for body in system.bodies
+        if body.body_type == "star" and body.details.get("fictional")
+    ]
+    assert stars
+    for star in stars:
+        visual_data = star.details["visual_data"]
+        assert visual_data["emissive"].startswith("#")
+        assert visual_data["emission_strength"] > 0
 
 
 def test_world_does_not_preseed_far_objective() -> None:
@@ -80,6 +113,26 @@ def test_environment_objects_include_emission_strength_in_visual_data() -> None:
             assert emission_strength >= 1.2
         if item.details["nebula_type"] == "dark":
             assert emission_strength <= 0.18
+
+
+def test_small_body_layers_are_seeded_compact_definitions() -> None:
+    first = generated_small_body_layers("small-body-alpha")
+    second = generated_small_body_layers("small-body-alpha")
+    different = generated_small_body_layers("small-body-beta")
+    assert first == second
+    assert [item.layer_type for item in first] == ["asteroid_belt", "comet_population", "oort_cloud"]
+    assert [item.particle_count for item in first] == [1_200, first[1].particle_count, 3_500]
+    assert 6 <= first[1].particle_count <= 10
+    assert [item.seed for item in first] != [item.seed for item in different]
+    assert all(not hasattr(item, "positions") for item in first)
+
+
+def test_oort_cloud_is_a_spherical_shell_definition() -> None:
+    oort = next(item for item in generated_small_body_layers("oort-shape") if item.layer_type == "oort_cloud")
+    assert oort.center == (0.0, 0.0, 0.0)
+    assert oort.inner_radius == 80.0
+    assert oort.outer_radius == 180.0
+    assert oort.details["distribution"] == "spherical_shell"
 
 
 def simplified_frontier(items) -> list[tuple[str, str, tuple[float, float, float], str]]:
