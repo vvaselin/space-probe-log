@@ -39,6 +39,7 @@ class MockLLMClient:
             f"**位置: {position}**\n\n"
             f"{_opening(context)}\n\n"
             f"{_scenery(passive, observations)}\n\n"
+            f"{_hazard_forecast(context)}\n\n"
             f"{_closing(context)}\n\n"
             "---\n\n"
             f"**次の観測予定地点: {_next_target(snapshot, context)}**\n\n"
@@ -135,6 +136,17 @@ def _scenery_line(observation: ObservationFact) -> str:
     if observation.sighting_level == "confirmed":
         strength = "能動観測で確認し"
     return f"{subject}{strength}、{observation.value}"
+
+
+def _hazard_forecast(context: LogContext) -> str:
+    hazards = context.route_context.get("route_hazards", [])
+    if not hazards:
+        return "Route forecast contains no registered small-body layer crossing."
+    hazard = hazards[0]
+    return (
+        f"Route forecast ({hazard['relation']}, {hazard['severity']}): {hazard['description']} "
+        f"Recommended response: {hazard['recommended_action']}. This is not a confirmed collision."
+    )
 
 
 def _closing(context: LogContext) -> str:

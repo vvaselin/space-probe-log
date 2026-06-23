@@ -42,10 +42,12 @@ from app.services.navigation import (
     active_navigation_state,
     begin_navigation,
     latest_navigation_state,
+    navigation_display_anchor,
     navigation_payload,
     synchronize_navigation,
 )
 from app.services.probe_spec import PROBE_ID, PROBE_LEGACY_IDS, PROBE_NAME, probe_specification
+from app.services.route_hazards import display_route_hazards
 from app.services.snapshots import probe_snapshot
 from app.world.generator import (
     EnvironmentObjectSpec,
@@ -662,21 +664,19 @@ def _route_environment_objects(db: Session, probe: Probe, target: StarSystem) ->
 
 def _route_small_body_layers(db: Session, probe: Probe, target: StarSystem) -> list[SmallBodyLayerSpec]:
     start = _vector_from_probe(probe)
-    end = _vector_from_system(target)
-    candidates: list[SmallBodyLayerSpec] = []
-    for layer in generated_small_body_layers(_world_seed(db)):
-        minimum_radius = _point_to_segment_distance(layer.center, start, end)
-        maximum_radius = max(_distance(layer.center, start), _distance(layer.center, end))
-        if minimum_radius > layer.outer_radius or maximum_radius < layer.inner_radius:
-            continue
-        if layer.layer_type == "asteroid_belt":
-            start_y = start[1] - layer.center[1]
-            end_y = end[1] - layer.center[1]
-            minimum_y = 0.0 if start_y * end_y <= 0 else min(abs(start_y), abs(end_y))
-            if minimum_y > layer.thickness:
-                continue
-        candidates.append(layer)
-    return sorted(candidates, key=lambda item: (item.outer_radius, item.id))
+    end = navigation_display_anchor(db, target)
+    layers = generated_small_body_layers(_world_seed(db))
+    hazard_ids = {item.id for item in display_route_hazards(start, end, layers)}
+    return [item for item in layers if item.id in hazard_ids]
+
+
+def _route_small_body_hazards(db: Session, probe: Probe, target: StarSystem) -> list[dict]:
+    hazards = display_route_hazards(
+        _vector_from_probe(probe),
+        navigation_display_anchor(db, target),
+        generated_small_body_layers(_world_seed(db)),
+    )
+    return [item.model_dump(mode="json") for item in hazards]
 
 
 def _nearby_route_bodies(db: Session, probe: Probe, target: StarSystem, route_phase: str | None) -> list[CelestialBody]:
@@ -1430,6 +1430,7 @@ def _log_scenery_context(
 
     environment_items = _route_environment_objects(db, probe_view, target) if target is not None else []
     small_body_items = _route_small_body_layers(db, probe_view, target) if target is not None else []
+    route_hazards = _route_small_body_hazards(db, probe_view, target) if target is not None else []
     observed_environment_ids = {observation.source for observation in observations if observation.object_type and observation.source}
     nearby_environment_objects = [
         {
@@ -1473,6 +1474,7 @@ def _log_scenery_context(
             "display_y": snapshot.get("display_y"),
             "display_z": snapshot.get("display_z"),
         },
+        "route_hazards": route_hazards,
     }
     return nearby_bodies, nearby_environment_objects, route_context
 

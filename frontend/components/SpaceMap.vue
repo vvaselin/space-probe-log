@@ -34,6 +34,17 @@ const targetCalloutData = computed(() => {
     progress: navigation ? `${Math.round(navigation.progress_percent)}%` : '-',
   }
 })
+const routeHazards = computed(() => props.payload.route_hazards ?? [])
+const hazardRelationLabel = (relation: 'crossing' | 'near_pass' | 'inside') => ({
+  crossing: '通過予定',
+  near_pass: '近接予定',
+  inside: '領域内',
+})[relation]
+const hazardSeverityLabel = (severity: 'low' | 'medium' | 'high') => ({
+  low: '低',
+  medium: '中',
+  high: '高',
+})[severity]
 type SpaceMapCameraView = {
   compact: boolean
   offset: { x: number; y: number; z: number }
@@ -1004,6 +1015,14 @@ onBeforeUnmount(() => cleanup?.())
 <template>
   <div class="space-map-shell">
     <div ref="host" class="map-frame" :class="{ 'map-compact': compact }" />
+    <aside v-if="routeHazards.length" class="route-hazard-panel" aria-label="航路上の通過予定">
+      <strong>航路上の通過予定</strong>
+      <div v-for="hazard in routeHazards" :key="hazard.id" class="route-hazard-panel__item">
+        <span>{{ hazard.name }}</span>
+        <span>{{ hazardRelationLabel(hazard.relation) }} / 危険度 {{ hazardSeverityLabel(hazard.severity) }}</span>
+        <small>{{ hazard.recommended_action }}</small>
+      </div>
+    </aside>
     <div v-if="showTargetCallout && targetCalloutData" ref="targetCallout" class="target-callout" hidden>
       <span class="target-callout__marker" />
       <span class="target-callout__leader" />

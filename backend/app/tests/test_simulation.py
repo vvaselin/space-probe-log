@@ -610,6 +610,7 @@ async def test_log_context_contains_scenery_and_related_body_ids(db) -> None:
     assert isinstance(client.log_context.nearby_bodies, list)
     assert isinstance(client.log_context.nearby_environment_objects, list)
     assert client.log_context.route_context["destination_system_id"] == "outer-solar-marker"
+    assert isinstance(client.log_context.route_context["route_hazards"], list)
     observed_body_ids = {
         item["source"]
         for item in event.data["observations"]
@@ -620,13 +621,13 @@ async def test_log_context_contains_scenery_and_related_body_ids(db) -> None:
 
 def test_small_body_route_candidates_require_shell_intersection(db) -> None:
     reset_world(db, "small-body-route")
-    target = SimpleNamespace(display_x=200.0, display_y=0.0, display_z=0.0)
+    target = SimpleNamespace(display_x=200.0, display_y=0.0, display_z=0.0, kind="waypoint", details={})
     probe = SimpleNamespace(display_x=0.0, display_y=0.0, display_z=0.0)
     intersecting = simulation_service._route_small_body_layers(db, probe, target)
     assert [item.layer_type for item in intersecting] == ["asteroid_belt", "comet_population", "oort_cloud"]
 
     high_probe = SimpleNamespace(display_x=0.0, display_y=250.0, display_z=0.0)
-    high_target = SimpleNamespace(display_x=200.0, display_y=250.0, display_z=0.0)
+    high_target = SimpleNamespace(display_x=200.0, display_y=250.0, display_z=0.0, kind="waypoint", details={})
     assert simulation_service._route_small_body_layers(db, high_probe, high_target) == []
 
 

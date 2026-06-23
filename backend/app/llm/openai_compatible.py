@@ -71,6 +71,7 @@ class OpenAICompatibleLLMClient:
             "resolved means it matches a known object and can be named. "
             "confirmed means an explicit observe or investigate action verified it. "
             "Never mention a celestial body or environment object that is absent from observations, nearby_bodies, and nearby_environment_objects. "
+            "Use route_context.route_hazards only as predicted display-space crossings or near passes. Never invent a hazard, claim a collision, or treat a predicted hazard as confirmed damage. "
             "Treat passive_sighting and passive_signal only as weak detection, parallax, spectral hints, reflected light, occultation, or scattered light; never promote them to confirmed discoveries. "
             "Do not add unconfirmed world facts, damage, resources, life, or discoveries. "
             "Do not use fixed report sections named '確認済みの事実', 'OVISの解釈', or '記録'. "

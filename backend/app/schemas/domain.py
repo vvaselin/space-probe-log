@@ -319,12 +319,26 @@ class LogDetail(LogListItem):
     interpretations: list[dict[str, Any]]
 
 
+class RouteHazard(BaseModel):
+    id: str
+    name: str
+    type: str
+    severity: Literal["low", "medium", "high"]
+    relation: Literal["crossing", "near_pass", "inside"]
+    closest_approach: float = Field(ge=0.0)
+    entry_progress: float = Field(ge=0.0, le=1.0)
+    exit_progress: float = Field(ge=0.0, le=1.0)
+    recommended_action: str
+    description: str
+
+
 class MapPayload(BaseModel):
     systems: list[dict[str, Any]]
     bodies: list[dict[str, Any]]
     signals: list[dict[str, Any]]
     environment_objects: list[dict[str, Any]] = Field(default_factory=list)
     small_body_layers: list[dict[str, Any]] = Field(default_factory=list)
+    route_hazards: list[RouteHazard] = Field(default_factory=list)
     probe: dict[str, Any]
     route: list[dict[str, float]]
     route_prediction: dict[str, Any] | None = None

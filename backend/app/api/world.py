@@ -10,6 +10,7 @@ from app.schemas.domain import MapPayload, SystemDetail, SystemRead
 from app.services.clock import ensure_simulation_clock
 from app.services.navigation import latest_navigation_state, navigation_display_anchor, navigation_payload
 from app.services.probe_spec import probe_specification
+from app.services.route_hazards import display_route_hazards
 from app.services.simulation import ensure_probe, main_route_target
 from app.world.generator import generated_environment_objects, generated_small_body_layers, real_data_epoch, stable_seed, stellar_visual_data
 
@@ -106,6 +107,13 @@ def get_map(db: Session = Depends(get_db)):
             "from": {"x": probe.display_x, "y": probe.display_y, "z": probe.display_z},
             "to": {"x": target_display[0], "y": target_display[1], "z": target_display[2]},
         }
+    route_hazards = []
+    if prediction:
+        route_hazards = display_route_hazards(
+            (prediction["from"]["x"], prediction["from"]["y"], prediction["from"]["z"]),
+            (prediction["to"]["x"], prediction["to"]["y"], prediction["to"]["z"]),
+            small_body_layers,
+        )
     primary_prediction = None
     if primary_target and primary_target.id != probe.current_system_id:
         primary_display = navigation_display_anchor(db, primary_target)
@@ -202,6 +210,7 @@ def get_map(db: Session = Depends(get_db)):
             }
             for item in small_body_layers
         ],
+        "route_hazards": [item.model_dump(mode="json") for item in route_hazards],
         "probe": {
             "id": probe.id,
             "name": probe.name,

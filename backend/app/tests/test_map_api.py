@@ -51,6 +51,7 @@ def test_map_exposes_compact_small_body_layers() -> None:
         payload = client.get("/api/world/map").json()
     assert [item["layer_type"] for item in payload["small_body_layers"]] == ["asteroid_belt", "comet_population", "oort_cloud"]
     assert all("positions" not in item for item in payload["small_body_layers"])
+    assert payload["route_hazards"] == []
 
 
 def test_map_includes_route_prediction_while_probe_is_underway(monkeypatch) -> None:
@@ -64,6 +65,8 @@ def test_map_includes_route_prediction_while_probe_is_underway(monkeypatch) -> N
     assert payload["probe"]["system_id"] in {"sol", "outer-solar-marker"}
     if payload["probe"]["target_id"] is not None:
         assert payload["route_prediction"]["target_id"] == payload["probe"]["target_id"]
+        assert isinstance(payload["route_hazards"], list)
+        assert any(item["type"] == "asteroid_belt" for item in payload["route_hazards"])
     else:
         assert payload["route_prediction"] is None
     assert payload["primary_route_prediction"] is not None

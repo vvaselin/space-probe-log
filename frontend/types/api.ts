@@ -76,6 +76,19 @@ export interface StarSystem {
   details: Record<string, unknown>
 }
 
+export interface RouteHazard {
+  id: string
+  name: string
+  type: string
+  severity: 'low' | 'medium' | 'high'
+  relation: 'crossing' | 'near_pass' | 'inside'
+  closest_approach: number
+  entry_progress: number
+  exit_progress: number
+  recommended_action: string
+  description: string
+}
+
 export interface MapPayload {
   systems: Array<{
     id: string
@@ -187,6 +200,7 @@ export interface MapPayload {
     }
     details?: Record<string, unknown>
   }>
+  route_hazards: RouteHazard[]
   probe: { id: string; name: string; x: number; y: number; z: number; system_id: string; target_id?: string | null; navigation?: ProbeNavigation; specification?: ProbeSpecification }
   route: Array<{ x: number; y: number; z: number }>
   route_prediction?: { target_id: string; target_name: string; from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number } } | null
