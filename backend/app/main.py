@@ -13,6 +13,8 @@ from app.db.base import Base
 from app.db.session import engine
 from app.services.scheduler import run_simulation_scheduler
 from app.voyage.scheduler import run_voyage_scheduler
+from app.voyage.service import ensure_voyage
+from app.voyage.store import cached_session_factory
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ LOGGER = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     settings = get_settings()
+    with cached_session_factory(settings.voyage_database_url)() as voyage_db:
+        ensure_voyage(voyage_db, settings.default_world_seed)
     stop_event = asyncio.Event()
     scheduler_task = (
         asyncio.create_task(run_simulation_scheduler(stop_event))

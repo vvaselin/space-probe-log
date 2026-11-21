@@ -86,4 +86,41 @@ export type VoyageSync = {
 
 export type VoyageStepResult = { log_id: number; log_number: number; title: string; scene: string; fallback: boolean }
 
+export type VoyageLogItem = {
+  log_number: number
+  title: string
+  summary: string
+  scene: string
+  subject: string
+  sim_time: string
+  published_at: string
+  revision: number
+  fallback: boolean
+}
+
+export type VoyageSighting = {
+  name: string
+  realism: string
+  distance_km: number
+  stage: string
+  telescope_stage: string
+  size: string
+  direction: string
+  phase: string | null
+  brightness: string
+  look: string
+  change: string | null
+  visible: boolean
+}
+
+export type VoyageLogDetail = VoyageLogItem & {
+  body_markdown: string
+  position: { sun_distance_au: number; earth_distance_km: number }
+  speed: { km_s: number; fraction_of_light: number; state?: string }
+  current_leg: { kind: string; from: string; to: string; remaining_km: number; eta_utc: string; remaining_time: string }
+  visible: VoyageSighting[]
+  next_destination: { name: string; reason: string; eta_utc: string; remaining_time?: string } | null
+  model: string | null
+}
+
 export type VoyagePosition = { real_at: string; sim_at: string; position_au: Vec3; leg_index: number | null }

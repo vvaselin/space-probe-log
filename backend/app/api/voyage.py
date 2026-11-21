@@ -14,12 +14,13 @@ from app.services.auth import require_admin
 from app.voyage import clock
 from app.voyage.route import Leg
 from app.voyage.scheduler import VOYAGE_STEP_LOCK, step_latest
-from app.voyage.service import StepConflictError, latest_voyage, load_legs
-from app.voyage.store import VoyageRecord, cached_session_factory
+from app.voyage.service import StepConflictError, current_logs, latest_voyage, load_legs
+from app.voyage.store import LogRecord, VoyageRecord, cached_session_factory
 from app.voyage.sync import (
     TimetablePoint,
     body_payload,
     build_timetable,
+    first_published_at,
     leg_formula,
     legs_in_range,
     probe_position,
@@ -86,6 +87,49 @@ def voyage_position(real_at: datetime | None = None, db: Session = Depends(get_v
     sim = sim_time_at(timetable, real)
     position, leg_index = probe_position(legs, start_of(world, voyage), sim)
     return {"real_at": real.isoformat(), "sim_at": sim.isoformat(), "position_au": position, "leg_index": leg_index}
+
+
+def _log_item(log: LogRecord, published_at: dict[int, datetime]) -> dict[str, Any]:
+    scene = log.llm_input["scene"]
+    return {
+        "log_number": log.log_number,
+        "title": log.title,
+        "summary": log.summary,
+        "scene": scene["kind"],
+        "subject": scene["subject"],
+        "sim_time": log.llm_input["time_utc"],
+        "published_at": published_at.get(log.log_number, log.created_at).isoformat(),
+        "revision": log.revision,
+        "fallback": log.fallback,
+    }
+
+
+@router.get("/logs")
+def list_logs(db: Session = Depends(get_voyage_db)) -> list[dict[str, Any]]:
+    """新しい順。書き直したログは最新の版だけ。"""
+    # shortcut: 全件を返す（1日1本なので当面は少ない）。数百本を超えたらページ分けを足す。
+    voyage = _voyage(db)
+    published_at = first_published_at(db, voyage.id)
+    return [_log_item(log, published_at) for log in reversed(current_logs(db, voyage.id))]
+
+
+@router.get("/logs/{log_number}")
+def get_log(log_number: int, db: Session = Depends(get_voyage_db)) -> dict[str, Any]:
+    voyage = _voyage(db)
+    log = next((log for log in current_logs(db, voyage.id) if log.log_number == log_number), None)
+    if log is None:
+        raise HTTPException(status_code=404, detail=f"LOG #{log_number:03d} はない")
+    payload = log.llm_input
+    return {
+        **_log_item(log, first_published_at(db, voyage.id)),
+        "body_markdown": log.body_markdown,
+        "position": payload["position"],
+        "speed": payload["speed"],
+        "current_leg": payload["current_leg"],
+        "visible": payload["visible"],
+        "next_destination": payload["next_destination"],
+        "model": log.llm_output.get("model"),
+    }
 
 
 @router.get("/clock")

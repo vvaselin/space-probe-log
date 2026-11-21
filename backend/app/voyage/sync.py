@@ -90,7 +90,7 @@ def probe_position(legs: list[Leg], start: Vec3, sim_at: datetime) -> tuple[Vec3
     return start, None
 
 
-def _first_published_at(db: Session, voyage_id: int) -> dict[int, datetime]:
+def first_published_at(db: Session, voyage_id: int) -> dict[int, datetime]:
     rows = db.execute(
         select(LogRecord.log_number, func.min(LogRecord.created_at))
         .where(LogRecord.voyage_id == voyage_id)
@@ -112,7 +112,7 @@ def build_timetable(
     一時停止は「時間が進まない区間」として、同じシミュレーション時刻の2点を入れる（11章）。
     止まっている最中は、止めた時点の点で終わる（その位置で待つ）。
     """
-    published_at = _first_published_at(db, voyage.id)
+    published_at = first_published_at(db, voyage.id)
     logs = db.scalars(
         select(LogRecord).where(LogRecord.voyage_id == voyage.id, LogRecord.revision == 1).order_by(LogRecord.log_number)
     ).all()

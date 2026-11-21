@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     admin_session_cookie_name: str = "space_probe_admin"
     simulation_tick_interval_seconds: float = 1.8
     scheduler_lease_seconds: int = 30
-    simulation_scheduler_enabled: bool = True
+    simulation_scheduler_enabled: bool = False  # 古いシミュレーション。新しい航行（app/voyage）へ切り替えたので既定で止める
     # 再設計版の航行（app/voyage）。CLI は標準でデバッグ用DBを使う。
     voyage_database_url: str = "sqlite:///./voyage.db"
     voyage_debug_database_url: str = "sqlite:///./voyage_debug.db"

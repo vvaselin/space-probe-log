@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core.time import utcnow
 
@@ -77,7 +78,9 @@ class VoyageClockRecord(VoyageBase):
 
 def _session_factory(url: str) -> sessionmaker[Session]:
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    engine = create_engine(url, connect_args=connect_args)
+    # メモリ上のDBはスレッドごとに別物になるので、1つの接続を共有する（テストでアプリを起動する時など）
+    pool = {"poolclass": StaticPool} if url in ("sqlite://", "sqlite:///:memory:") else {}
+    engine = create_engine(url, connect_args=connect_args, **pool)
     VoyageBase.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)
 

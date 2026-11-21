@@ -30,6 +30,15 @@ export function speedAt(p: LegProfile, tMs: number): number {
   return (p.cruise_speed_km_s * (duration - tau)) / p.decel_s
 }
 
+// backend/app/voyage/motion.py の state_at と同じ区切り
+export function speedStateAt(p: LegProfile, tMs: number): '停止' | '加速中' | '巡航中' | '減速中' {
+  const tau = (tMs - legDepartMs(p)) / 1000
+  if (tau <= 0 || tau >= legDurationS(p)) return '停止'
+  if (tau < p.accel_s) return '加速中'
+  if (tau < p.accel_s + p.cruise_s) return '巡航中'
+  return '減速中'
+}
+
 export function legPositionAt(p: LegProfile, tMs: number): Vec3 {
   const total = legDistanceKm(p)
   if (total === 0) return p.origin_au

@@ -55,6 +55,11 @@ def latest_voyage(db: Session) -> VoyageRecord | None:
     return db.scalars(select(VoyageRecord).order_by(VoyageRecord.id.desc())).first()
 
 
+def ensure_voyage(db: Session, seed: str) -> VoyageRecord:
+    """航海が1つもなければ作る（手動モードで始まる）。アプリの起動時に呼ぶ。"""
+    return latest_voyage(db) or create_voyage(db, seed)
+
+
 def load_legs(db: Session, voyage_id: int) -> list[Leg]:
     rows = db.scalars(select(LegRecord).where(LegRecord.voyage_id == voyage_id).order_by(LegRecord.index)).all()
     return [Leg.model_validate(row.data) for row in rows]
