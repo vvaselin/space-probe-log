@@ -22,6 +22,7 @@ PLACEHOLDERS = ("XX", "??", "〇〇")
 EARLY_LOG_LIMIT = 3  # 「窓——いや」の言い直しを許す回数
 WATCH_PHRASES = ("理由は不明", "ログに記録", "削除しない", "消さなかった", "分類不能", "まだ分類していない", "いや、")
 ATTEMPTS = 2
+INTERNAL_KEY = "internal"  # 保存する入力のうち、LLMには送らない部分
 
 T = TypeVar("T")
 
@@ -57,7 +58,11 @@ def validate_route_answer(data: object, offered_count: int) -> tuple[int, str]:
 
 
 def validate_log_answer(data: object, log_number: int) -> LogDraft:
-    draft = LogDraft.model_validate(_as_object(data))
+    obj = dict(_as_object(data))
+    if isinstance(obj.get("body"), str):
+        # 改行を二重にエスケープして「\n」という文字で返すモデルがある。
+        obj["body"] = obj["body"].replace("\\n", "\n")
+    draft = LogDraft.model_validate(obj)
     text = f"{draft.title}\n{draft.summary}\n{draft.body}"
     problems = [w for w in BANNED_WORDS if w in text] + [p for p in PLACEHOLDERS if p in text]
     if log_number > EARLY_LOG_LIMIT and "窓" in text:
@@ -135,7 +140,8 @@ def fallback_draft(payload: dict[str, Any]) -> LogDraft:
 async def write_log(llm: JsonLLM, payload: dict[str, Any]) -> tuple[LogDraft, dict[str, Any], bool]:
     """返すのは（本文、試行の記録、定型文で埋めたか）。"""
     system = load_prompt("log_writer.md")
-    draft, attempts = await ask_with_retry(llm, system, payload, lambda d: validate_log_answer(d, payload["log_number"]))
+    sent = {k: v for k, v in payload.items() if k != INTERNAL_KEY}
+    draft, attempts = await ask_with_retry(llm, system, sent, lambda d: validate_log_answer(d, payload["log_number"]))
     record = {"model": llm.model, "prompt_version": prompt_version(system), "attempts": attempts}
     if draft is None:
         return fallback_draft(payload), record, True

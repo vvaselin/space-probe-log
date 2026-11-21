@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -15,6 +16,9 @@ LOCAL_SPEED_KM_S = 180.0  # 惑星系の中（地球から月まで約1時間）
 ACCEL_FRACTION = 0.05
 MIN_ACCEL_S = 600.0
 MAX_ACCEL_S = 86_400.0
+
+SpeedState = Literal["stopped", "accelerating", "cruising", "decelerating"]
+SPEED_STATE_LABELS: dict[str, str] = {"stopped": "停止", "accelerating": "加速中", "cruising": "巡航中", "decelerating": "減速中"}
 
 
 def cruise_speed_km_s(r_au: float) -> float:
@@ -74,6 +78,16 @@ class LegProfile(BaseModel):
         if tau < ta + tc:
             return v
         return v * (self.duration_s - tau) / td
+
+    def state_at(self, t: datetime) -> SpeedState:
+        tau = (t - self.depart_at).total_seconds()
+        if tau <= 0 or tau >= self.duration_s:
+            return "stopped"
+        if tau < self.accel_s:
+            return "accelerating"
+        if tau < self.accel_s + self.cruise_s:
+            return "cruising"
+        return "decelerating"
 
     def position_at(self, t: datetime) -> Vec3:
         total = self.distance_km

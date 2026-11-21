@@ -30,6 +30,15 @@ def test_sun_from_30_au_is_a_dazzling_point() -> None:
     assert seen.direction == "真後ろ"
 
 
+def test_sun_disk_milestone_matches_the_visibility_stage() -> None:
+    world = load_world()
+    line = next(m for m in world.milestones if m.id == "sun_disk")
+    inside = sight(world, world.get("sun"), T, ship=(line.r_au - 0.1, 0.0, 0.0), heading=(1.0, 0.0, 0.0))
+    outside = sight(world, world.get("sun"), T, ship=(line.r_au + 0.1, 0.0, 0.0), heading=(1.0, 0.0, 0.0))
+    assert inside is not None and inside.stage == "小さな円盤"
+    assert outside is not None and outside.stage == "点"
+
+
 def test_observe_always_includes_sun_earth_and_next_target_and_limits_others() -> None:
     world = load_world()
     earth = position_au(world, world.get("earth"), T)
@@ -53,6 +62,15 @@ def test_direction_and_phase_words() -> None:
     assert seen is not None
     assert seen.phase is not None and "半分が明るい" in seen.phase
     assert "舷側" in seen.direction
+
+
+def test_details_only_the_telescope_can_see_are_labelled() -> None:
+    world = load_world()
+    earth = position_au(world, world.get("earth"), T)
+    seen = sight(world, world.get("jupiter"), T, ship=earth, heading=(1.0, 0.0, 0.0))
+    assert seen is not None and seen.stage == "点" and seen.telescope_stage == "大きく見える"
+    assert seen.look.startswith("広角では") and "望遠カメラでは、" in seen.look and "大赤斑" in seen.look.split("望遠カメラでは、")[1]
+    assert seen.phase is not None and seen.phase.startswith("望遠カメラでは、")
 
 
 def test_change_from_previous_sighting() -> None:

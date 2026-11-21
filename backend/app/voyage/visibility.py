@@ -187,6 +187,13 @@ def _look_text(visual: Visual, stage: Stage, view: Vec3) -> str:
     return "、".join(parts)
 
 
+def _look_both(visual: Visual, stage: Stage, telescope_stage: Stage, view: Vec3) -> str:
+    """望遠でしか見えない物は「望遠カメラでは」と分けて渡す。小さいモデルが段階を取り違えないように。"""
+    if telescope_stage == stage:
+        return _look_text(visual, stage, view)
+    return f"広角では{_look_text(visual, stage, view)}。望遠カメラでは、{_look_text(visual, telescope_stage, view)}"
+
+
 def _change_text(stage: Stage, ratio: float, magnitude: float, previous: Sighting | None) -> str | None:
     if previous is None:
         return None
@@ -220,6 +227,9 @@ def sight(
     is_star = dest.abs_magnitude is not None
     lit = 1.0 if is_star else _lit_fraction(body, ship)
     magnitude = _magnitude(dest, body, distance_au, lit)
+    phase = None if is_star or telescope_stage == "点" else _phase_text(body, ship, frame[1], lit)
+    if phase is not None and stage == "点":
+        phase = f"望遠カメラでは、{phase}"
     return Sighting(
         id=dest.id,
         name=dest.name,
@@ -231,10 +241,10 @@ def sight(
         telescope_stage=telescope_stage,
         size=_size_text(ratio),
         direction=_direction_text(view, frame),
-        phase=None if is_star or telescope_stage == "点" else _phase_text(body, ship, frame[1], lit),
+        phase=phase,
         magnitude=round(magnitude, 2),
         brightness=_brightness_text(magnitude),
-        look=_look_text(dest.visual, telescope_stage, view),
+        look=_look_both(dest.visual, stage, telescope_stage, view),
         change=_change_text(telescope_stage, ratio, magnitude, previous),
         visible=stage != "点" or magnitude <= NAKED_EYE_LIMIT_MAG,
     )

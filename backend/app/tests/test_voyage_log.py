@@ -49,8 +49,15 @@ async def test_step_writes_one_log_per_scene_with_mock_and_no_network(db_url: st
     first = logs[0]
     assert first.llm_input["scene"]["kind"] == "出発"
     assert "NOCTUA-7" in first.body_markdown and "LOG #001" in first.body_markdown
-    assert {s["id"] for s in first.llm_input["visible"]} >= {"sun", "earth", "moon"}
+    assert {s["id"] for s in first.llm_input["internal"]["sightings"]} >= {"sun", "earth", "moon"}
+    assert len(first.llm_input["visible"]) <= 3 + 3
+    assert all("magnitude" not in s and "size_ratio" not in s for s in first.llm_input["visible"])
     assert first.llm_input["next_destination"]["name"] == "月"
+    assert first.llm_input["next_destination"]["remaining_time"].startswith("約")
+    assert first.llm_input["speed"]["state"] == "停止"
+    assert "加速" in first.llm_input["scene"]["meaning"]
+    states = {log.llm_input["speed"]["state"] for log in logs}
+    assert states & {"加速中", "巡航中", "減速中"}
     # 最接近の場面では、次の区間が先に決まっている
     legs = load_legs(db, voyage.id)
     closest = next(log for log in logs if log.llm_input["scene"]["kind"] == "最接近・到着")
@@ -67,7 +74,8 @@ async def test_rewrite_uses_the_saved_input_and_adds_a_revision(db_url: str) -> 
     assert original is not None
     llm = ScriptedLLM([{"title": "書き直し", "summary": "書き直した", "body": GOOD_BODY}])
     again = await rewrite(db, original.id, llm)
-    assert llm.calls == [original.llm_input]
+    sent = {k: v for k, v in original.llm_input.items() if k != "internal"}
+    assert llm.calls == [sent]
     assert again.revision == 2 and again.log_number == original.log_number
     assert current_logs(db, voyage.id)[0].id == again.id
     assert db.query(LogRecord).count() == 2
@@ -96,6 +104,11 @@ def test_avoided_body_words_are_rejected() -> None:
     with pytest.raises(ValueError, match="窓"):
         validate_log_answer({"title": "t", "summary": "s", "body": GOOD_BODY + "窓の外。"}, log_number=4)
     validate_log_answer({"title": "t", "summary": "s", "body": GOOD_BODY + "窓——いや、広角光学センサー越しに。"}, log_number=1)
+
+
+def test_literal_backslash_n_in_body_becomes_a_newline() -> None:
+    draft = validate_log_answer({"title": "t", "summary": "s", "body": GOOD_BODY + "\\n\\n次へ。"}, log_number=1)
+    assert "\\n" not in draft.body and draft.body.endswith("\n\n次へ。")
 
 
 async def test_route_answer_outside_the_offer_uses_the_top_candidate() -> None:

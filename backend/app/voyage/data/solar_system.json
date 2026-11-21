@@ -6,7 +6,7 @@
     "visual": "hand-written (radius km, geometric albedo from NASA fact sheets)"
   },
   "milestones": [
-    {"id": "sun_disk", "name": "太陽が円盤に見えなくなる", "r_au": 30.0},
+    {"id": "sun_disk", "name": "太陽が円盤に見えなくなる", "r_au": 20.5},
     {"id": "heliopause", "name": "ヘリオポーズを越える", "r_au": 120.0},
     {"id": "light_day", "name": "光の信号なら地球まで片道1日を超える", "r_au": 173.1},
     {"id": "sun_like_sirius", "name": "太陽がシリウスほどの明るさになる", "r_au": 113446.0}

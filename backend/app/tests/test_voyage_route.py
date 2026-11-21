@@ -33,6 +33,13 @@ def test_profile_is_continuous_and_reaches_the_end() -> None:
     travelled = [profile.travelled_km(t) for t in steps]
     assert travelled == sorted(travelled)
     assert max(profile.speed_at(t) for t in steps) == pytest.approx(200.0)
+    assert [profile.state_at(t) for t in (steps[0], steps[1], steps[25], steps[49], steps[50])] == [
+        "stopped",
+        "accelerating",
+        "cruising",
+        "decelerating",
+        "stopped",
+    ]
     assert profile.duration_s / 86_400 == pytest.approx(AU_KM / 200 / 86_400 + profile.accel_s / 86_400, rel=1e-6)
 
 
@@ -49,6 +56,14 @@ def test_route_never_goes_back_inside(legs: list[Leg]) -> None:
     for leg in legs:
         if leg.leg_kind != "tour":
             assert norm(leg.profile.destination_au) >= INWARD_LIMIT * norm(leg.profile.origin_au), leg.index
+
+
+def test_candidates_stay_between_08_and_3_times_the_current_distance(legs: list[Leg]) -> None:
+    for leg in legs:
+        p = leg.planning
+        for c in p.candidates:
+            if c.leg_kind != "tour":
+                assert INWARD_LIMIT * p.current_r_au <= c.r_au <= 3 * p.current_r_au, (leg.index, c.id)
 
 
 def test_legs_chain_without_gaps(legs: list[Leg]) -> None:

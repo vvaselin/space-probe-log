@@ -19,7 +19,7 @@ MAIN_MIN_FACTOR = 1.5
 MAIN_MAX_FACTOR = 3.0
 MIN_STEP_AU = 0.5
 INWARD_LIMIT = 0.8
-DETOUR_TIME_FACTOR = 0.5
+DETOUR_TIME_FACTOR = 1.0  # 寄り道は、本線の候補の最短の所要時間以内で行ける物
 OFFER_COUNT = 3
 STAGNATION_BOOST = 0.5
 WEIGHTS: dict[str, float] = {"outward": 1.0, "novelty": 0.5, "highlight": 1.0, "travel_time": -0.3}
@@ -169,9 +169,10 @@ def rank_candidates(world: World, legs: list[Leg], start_at: datetime) -> list[C
         if dest.id in visited or dest.kind != "body" or dest.subtype in ("star", "moon"):
             continue
         rd, km = where(dest)
-        if rd < INWARD_LIMIT * r:
+        # 0.8倍より内側には戻らない。3倍より外は本線にも寄り道にもしない（寄り道は「途中で行ける物」）。
+        if rd < INWARD_LIMIT * r or rd > MAIN_MAX_FACTOR * r:
             continue
-        is_main = max(MAIN_MIN_FACTOR * r, r + MIN_STEP_AU) <= rd <= MAIN_MAX_FACTOR * r
+        is_main = max(MAIN_MIN_FACTOR * r, r + MIN_STEP_AU) <= rd
         days = km / cruise_speed_km_s(max(r, rd)) / DAY_S
         (mains if is_main else others).append(_candidate(dest, "main" if is_main else "detour", r, rd, days, recent_subtypes, stuck))
     if not mains:

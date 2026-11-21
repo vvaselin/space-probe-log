@@ -10,16 +10,19 @@ from sqlalchemy.orm import Session
 
 from app.llm.client import JsonLLM
 from app.models.entities import MISSION_START_AT
-from app.voyage.llm import LogDraft, llm_chooser, recent_phrases, write_log
+from app.voyage.llm import INTERNAL_KEY, LogDraft, llm_chooser, recent_phrases, write_log
+from app.voyage.motion import SPEED_STATE_LABELS
 from app.voyage.orbits import AU_KM, C_KM_S, norm, sub
 from app.voyage.route import LEG_KIND_LABELS, Leg, plan_leg
-from app.voyage.scenes import SCENE_LABELS
+from app.voyage.scenes import SCENE_LABELS, SCENE_MEANINGS
 from app.voyage.store import LegRecord, LogRecord, VoyageRecord
 from app.voyage.visibility import Sighting, observe
 from app.voyage.world import World, position_au
 
 RECENT_LOGS = 3
 PHRASE_WINDOW = 5
+LOG_OTHER_LIMIT = 3  # 小さいモデルが全部を並べないよう、太陽・地球・行き先以外は3件まで
+INTERNAL_SIGHTING_FIELDS = {"id", "size_ratio", "magnitude", "distance_au"}
 
 
 def _time(t: datetime) -> str:
@@ -83,27 +86,30 @@ def build_log_payload(
         must.append(next_leg.target.id)
     if scene.kind in ("flyby", "leave"):
         must.append(scene.subject_id)
-    sightings = observe(world, t, ship, sub(profile.destination_au, profile.origin_au), must, previous)
+    sightings = observe(world, t, ship, sub(profile.destination_au, profile.origin_au), must, previous, LOG_OTHER_LIMIT)
+    full_sightings = [s.model_dump() for s in sightings]
     speed = profile.speed_at(t)
     remaining_s = (profile.arrive_at - t).total_seconds()
-    if scene.kind != "closest":
-        next_destination: dict[str, str] | None = {
-            "name": leg.target.name,
-            "reason": leg.planning.reason,
-            "eta_utc": _time(profile.arrive_at),
+    heading_leg = leg if scene.kind != "closest" else next_leg
+    next_destination = (
+        {
+            "name": heading_leg.target.name,
+            "reason": heading_leg.planning.reason,
+            "eta_utc": _time(heading_leg.profile.arrive_at),
+            "remaining_time": _duration_text((heading_leg.profile.arrive_at - t).total_seconds()),
         }
-    elif next_leg is not None:
-        next_destination = {
-            "name": next_leg.target.name,
-            "reason": next_leg.planning.reason,
-            "eta_utc": _time(next_leg.profile.arrive_at),
-        }
-    else:
-        next_destination = None
+        if heading_leg is not None
+        else None
+    )
     earth = position_au(world, world.get("earth"), t)
     return {
         "log_number": log_number,
-        "scene": {"kind": SCENE_LABELS[scene.kind], "subject": subject, "detail": scene.detail},
+        "scene": {
+            "kind": SCENE_LABELS[scene.kind],
+            "meaning": SCENE_MEANINGS[scene.kind],
+            "subject": subject,
+            "detail": scene.detail,
+        },
         "time_utc": _time(t),
         "mission_elapsed": _duration_text((t - start_at).total_seconds()),
         "position": {
@@ -111,7 +117,11 @@ def build_log_payload(
             "earth_distance_km": round(norm(sub(ship, earth)) * AU_KM),
             "ecliptic_au": [round(c, 6) for c in ship],
         },
-        "speed": {"km_s": round(speed, 1), "fraction_of_light": round(speed / C_KM_S, 5)},
+        "speed": {
+            "km_s": round(speed, 1),
+            "fraction_of_light": round(speed / C_KM_S, 5),
+            "state": SPEED_STATE_LABELS[profile.state_at(t)],
+        },
         "current_leg": {
             "kind": LEG_KIND_LABELS[leg.leg_kind],
             "from": world.get(leg.origin_id).name,
@@ -120,14 +130,22 @@ def build_log_payload(
             "eta_utc": _time(profile.arrive_at),
             "remaining_time": _duration_text(remaining_s) if remaining_s > 0 else "到着",
         },
-        "visible": [s.model_dump() for s in sightings],
+        "visible": [{k: v for k, v in s.items() if k not in INTERNAL_SIGHTING_FIELDS} for s in full_sightings],
         "next_destination": next_destination,
         "recent_logs": [
             {"log_number": r.log_number, "scene": r.llm_input["scene"]["kind"], "summary": r.summary}
             for r in recent[-RECENT_LOGS:]
         ],
         "recent_phrases": recent_phrases([r.body_markdown for r in recent[-PHRASE_WINDOW:]]),
+        # LLMには送らない。次のログの「前回との差」を計算するために残す。
+        INTERNAL_KEY: {"sightings": full_sightings},
     }
+
+
+def previous_sightings(log: LogRecord) -> dict[str, Sighting]:
+    # 古いログは visible に全項目を持っていた。
+    items = log.llm_input.get(INTERNAL_KEY, {}).get("sightings") or log.llm_input["visible"]
+    return {s["id"]: Sighting.model_validate(s) for s in items}
 
 
 def compose_markdown(payload: dict[str, Any], draft: LogDraft) -> str:
@@ -177,7 +195,7 @@ async def step(db: Session, voyage: VoyageRecord, world: World, route_llm: JsonL
         else:
             save_leg(nxt)
 
-    previous = {s["id"]: Sighting.model_validate(s) for s in logs[-1].llm_input["visible"]} if logs else {}
+    previous = previous_sightings(logs[-1]) if logs else {}
     log_number = logs[-1].log_number + 1 if logs else 1
     payload = build_log_payload(world, start_at, legs, leg_index, scene_index, log_number, previous, logs)
     draft, output, fallback = await write_log(log_llm, payload)
