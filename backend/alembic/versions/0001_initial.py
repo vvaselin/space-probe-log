@@ -13,18 +13,24 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
+# 後の移行（0002、0003）が作るテーブル。ここで作ると、後の移行が「すでにある」で失敗する。
+LATER_TABLES = {"simulation_clocks", "simulation_settings", "probe_navigation_states", "admin_sessions", "scheduler_leases"}
+
+
+def _initial_tables() -> list[sa.Table]:
+    import app.models  # noqa: F401  モデルを Base.metadata に登録する
+    from app.db.base import Base
+
+    return [table for name, table in Base.metadata.tables.items() if name not in LATER_TABLES]
+
 
 def upgrade() -> None:
     from app.db.base import Base
-    from app.models import *  # noqa: F403
 
-    bind = op.get_bind()
-    Base.metadata.create_all(bind=bind)
+    Base.metadata.create_all(bind=op.get_bind(), tables=_initial_tables())
 
 
 def downgrade() -> None:
     from app.db.base import Base
-    from app.models import *  # noqa: F403
 
-    bind = op.get_bind()
-    Base.metadata.drop_all(bind=bind)
+    Base.metadata.drop_all(bind=op.get_bind(), tables=_initial_tables())
