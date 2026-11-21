@@ -10,11 +10,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.llm.client import JsonLLM
-from app.models.entities import MISSION_START_AT
 from app.voyage.llm import INTERNAL_KEY, LogDraft, llm_chooser, recent_phrases, write_log
 from app.voyage.motion import SPEED_STATE_LABELS
 from app.voyage.orbits import AU_KM, C_KM_S, norm, sub
-from app.voyage.route import LEG_KIND_LABELS, Leg, plan_leg
+from app.voyage.route import LEG_KIND_LABELS, START_AT, Leg, plan_leg
 from app.voyage.scenes import SCENE_LABELS, SCENE_MEANINGS
 from app.voyage.store import LegRecord, LogRecord, VoyageRecord
 from app.voyage.visibility import Sighting, observe
@@ -44,7 +43,7 @@ def _duration_text(seconds: float) -> str:
     return f"約{seconds / 86_400:.1f}日"
 
 
-def create_voyage(db: Session, seed: str, start_at: datetime = MISSION_START_AT) -> VoyageRecord:
+def create_voyage(db: Session, seed: str, start_at: datetime = START_AT) -> VoyageRecord:
     voyage = VoyageRecord(seed=seed, start_at=start_at)
     db.add(voyage)
     db.commit()

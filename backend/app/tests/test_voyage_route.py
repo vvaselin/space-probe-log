@@ -3,11 +3,10 @@ from typing import Any
 
 import pytest
 
-from app.models.entities import MISSION_START_AT
 from app.voyage.cli import mock_chooser, simulate_route
 from app.voyage.motion import cruise_speed_km_s, make_profile
 from app.voyage.orbits import AU_KM, norm, sub
-from app.voyage.route import INWARD_LIMIT, Candidate, Choice, Leg, plan_leg, standoff_au
+from app.voyage.route import INWARD_LIMIT, START_AT, Candidate, Choice, Leg, plan_leg, standoff_au
 from app.voyage.world import load_world, position_au
 
 
@@ -15,7 +14,7 @@ from app.voyage.world import load_world, position_au
 def legs() -> list[Leg]:
     import asyncio
 
-    return asyncio.run(simulate_route(100, MISSION_START_AT, mock_chooser("test-seed")))
+    return asyncio.run(simulate_route(100, START_AT, mock_chooser("test-seed")))
 
 
 def test_cruise_speed_follows_the_table() -> None:
@@ -26,7 +25,7 @@ def test_cruise_speed_follows_the_table() -> None:
 
 
 def test_profile_is_continuous_and_reaches_the_end() -> None:
-    profile = make_profile((1.0, 0.0, 0.0), (2.0, 0.0, 0.0), MISSION_START_AT, 200.0)
+    profile = make_profile((1.0, 0.0, 0.0), (2.0, 0.0, 0.0), START_AT, 200.0)
     assert profile.position_at(profile.depart_at) == (1.0, 0.0, 0.0)
     assert profile.position_at(profile.arrive_at) == pytest.approx((2.0, 0.0, 0.0))
     steps = [profile.depart_at + timedelta(seconds=profile.duration_s * i / 50) for i in range(51)]
@@ -112,7 +111,7 @@ async def test_answer_outside_the_offer_falls_back_to_the_top_candidate() -> Non
     async def wrong(offered: list[Candidate], context: dict[str, Any]) -> Choice:
         return Choice(target_id="pluto", reason="候補にない")
 
-    leg = await plan_leg(load_world(), [], MISSION_START_AT, wrong)
+    leg = await plan_leg(load_world(), [], START_AT, wrong)
     assert leg is not None
     assert leg.planning.fell_back is True
     assert leg.target.id == leg.planning.candidates[0].id

@@ -11,7 +11,6 @@ from app.api import routers
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import engine
-from app.services.scheduler import run_simulation_scheduler
 from app.voyage.scheduler import run_voyage_scheduler
 from app.voyage.service import ensure_voyage
 from app.voyage.store import cached_session_factory
@@ -25,19 +24,13 @@ async def lifespan(app: FastAPI):
     with cached_session_factory(settings.voyage_database_url)() as voyage_db:
         ensure_voyage(voyage_db, settings.default_world_seed)
     stop_event = asyncio.Event()
-    scheduler_task = (
-        asyncio.create_task(run_simulation_scheduler(stop_event))
-        if settings.simulation_scheduler_enabled
-        else None
-    )
     voyage_task = asyncio.create_task(run_voyage_scheduler(stop_event)) if settings.voyage_scheduler_enabled else None
     try:
         yield
     finally:
         stop_event.set()
-        for task in (scheduler_task, voyage_task):
-            if task is not None:
-                await task
+        if voyage_task is not None:
+            await voyage_task
 
 
 def create_app() -> FastAPI:

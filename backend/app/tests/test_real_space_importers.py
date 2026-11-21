@@ -1,7 +1,4 @@
-import json
-
 from app.importers.normalize import normalize_exoplanet_row, normalize_horizons_vector
-from app.world import generator
 
 
 HORIZONS_SAMPLE = """
@@ -53,50 +50,3 @@ def test_exoplanet_normalization_filters_100_light_years_and_computes_pc_coordin
     assert item.fictional_data == {}
     assert normalize_exoplanet_row({**row, "sy_dist": 40}) is None
 
-
-def test_world_uses_real_solar_cache_when_available(tmp_path, monkeypatch) -> None:
-    cache = tmp_path / "solar_system.json"
-    cache.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "source": "jpl_horizons",
-                "source_epoch": "2026-06-16",
-                "objects": [
-                    {
-                        "id": "earth",
-                        "name": "地球",
-                        "object_type": "rocky_planet",
-                        "source": "jpl_horizons",
-                        "source_id": "399",
-                        "source_epoch": "2026-06-16",
-                        "physical_data": {"radius_km": 6371},
-                        "position_data": {"solar_system_au": {"x": 1, "y": 0.1, "z": 0.2, "vx": 0, "vy": 0, "vz": 0}},
-                        "visual_data": {"texture_key": "rocky_01"},
-                        "fictional_data": {},
-                    }
-                ],
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(generator, "SOLAR_SYSTEM_CACHE", cache)
-    monkeypatch.setattr(generator, "EXOPLANET_CACHE", tmp_path / "missing-exoplanets.json")
-    world = generator.generate_world("real-cache-test")
-    sol = next(item for item in world if item.id == "sol")
-    earth = next(body for body in sol.bodies if body.id == "earth")
-    assert sol.details["source"] == "jpl_horizons"
-    assert earth.details["source"] == "jpl_horizons"
-    assert earth.details["position_data"]["solar_system_au"]["x"] == 1
-
-
-def test_environment_objects_are_seeded_and_have_visual_data() -> None:
-    world = generator.generate_world("env-seed")
-    first = generator.generated_environment_objects("env-seed", world)
-    second = generator.generated_environment_objects("env-seed", world)
-    assert [(item.id, item.display, item.details["texture_key"]) for item in first] == [
-        (item.id, item.display, item.details["texture_key"]) for item in second
-    ]
-    assert {item.object_type for item in first} <= {"nebula", "dust_cloud", "anomaly_region"}
-    assert all(item.details["source"] == "generated" for item in first)

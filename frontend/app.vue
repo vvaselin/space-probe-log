@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const store = useMissionStore()
+const store = useAdminStore()
 const voyage = useVoyageStore()
 const hud = useVoyageHud()
 

@@ -1,3 +1,3 @@
-from app.api import admin, health, logs, probe, settings, simulation, voyage, world
+from app.api import admin, health, voyage
 
-routers = [health.router, admin.router, probe.router, logs.router, world.router, settings.router, simulation.router, voyage.router]
+routers = [health.router, admin.router, voyage.router]

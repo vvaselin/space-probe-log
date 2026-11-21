@@ -3,7 +3,7 @@
 const props = defineProps<{ compact?: boolean }>()
 
 const api = useApi()
-const mission = useMissionStore()
+const admin = useAdminStore()
 const voyage = useVoyageStore()
 const busy = ref(false)
 const message = ref<string | null>(null)
@@ -17,7 +17,7 @@ const INTERVAL_PRESETS = [
 const clock = computed(() => voyage.sync?.clock ?? null)
 
 async function run(label: string, action: (csrf: string) => Promise<unknown>) {
-  const csrf = mission.adminSession?.csrf_token
+  const csrf = admin.adminSession?.csrf_token
   if (!csrf) {
     message.value = '管理者ログインが必要です'
     return
@@ -40,7 +40,7 @@ const changeInterval = (seconds: number) => run('間隔の変更', (csrf) => api
 </script>
 
 <template>
-  <section v-if="mission.isAdmin && clock" class="voyage-admin" :class="{ 'voyage-admin--compact': props.compact }">
+  <section v-if="admin.isAdmin && clock" class="voyage-admin" :class="{ 'voyage-admin--compact': props.compact }">
     <span>公開 {{ clock.mode === 'auto' ? '自動' : '手動' }}・間隔 {{ clock.interval_seconds.toLocaleString('ja-JP') }} 秒</span>
     <button type="button" :disabled="busy || clock.ended" @click="run('次の場面へ進める', api.stepVoyage)">次の場面へ進める</button>
     <button v-if="clock.paused" type="button" :disabled="busy" @click="run('再開', api.resumeVoyage)">再開</button>
