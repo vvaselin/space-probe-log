@@ -1,4 +1,5 @@
 import type { AdminSession, LogDetail, LogListItem, MapPayload, Probe, ProbeNavigation, ProbeSpecification, PromptSettings, SimulationClock, SimulationSettings, SimulationSettingsUpdate, SimulationStep, SimulationTick, StarSystem } from '~/types/api'
+import type { VoyagePosition, VoyageSync } from '~/utils/voyage/types'
 
 export function useApi() {
   const config = useRuntimeConfig()
@@ -28,6 +29,8 @@ export function useApi() {
     getLog: (id: string | number) => request<LogDetail>(`/api/logs/${id}`),
     getSystems: () => request<StarSystem[]>('/api/world/systems'),
     getMap: () => request<MapPayload>('/api/world/map'),
+    getVoyageSync: () => request<VoyageSync>('/api/voyage/sync'),
+    getVoyagePosition: (realAt: string) => request<VoyagePosition>(`/api/voyage/position?real_at=${encodeURIComponent(realAt)}`),
     getPrompts: () => request<PromptSettings>('/api/settings/prompts'),
     getSimulationSettings: () => request<SimulationSettings>('/api/settings/simulation'),
     saveSimulationSettings: (payload: SimulationSettingsUpdate, csrfToken: string) =>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
@@ -61,8 +62,19 @@ class LogRecord(VoyageBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-def open_session(url: str) -> Session:
+def _session_factory(url: str) -> sessionmaker[Session]:
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, connect_args=connect_args)
     VoyageBase.metadata.create_all(engine)
-    return sessionmaker(bind=engine, expire_on_commit=False)()
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def open_session(url: str) -> Session:
+    """呼ぶたびに新しいエンジン（CLI とテスト用。メモリ上のDBはテストごとに別になる）。"""
+    return _session_factory(url)()
+
+
+@lru_cache
+def cached_session_factory(url: str) -> sessionmaker[Session]:
+    """API 用。エンジンを使い回す。"""
+    return _session_factory(url)

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # 再設計版の航行（app/voyage）。CLI は標準でデバッグ用DBを使う。
     voyage_database_url: str = "sqlite:///./voyage.db"
     voyage_debug_database_url: str = "sqlite:///./voyage_debug.db"
+    voyage_publish_interval_seconds: float = 86_400.0  # ログを公開する間隔（本番は1日1本）。時刻表の「次の公開」に使う
     # 用途ごとの LLM。base_url・model・api_key を省くと OPENAI_* を使う（base_url を変えた時は OPENAI_API_KEY を送らない）。
     voyage_llm_route_provider: Literal["mock", "openai_compatible"] = "mock"
     voyage_llm_route_base_url: str | None = None
