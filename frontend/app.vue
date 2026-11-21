@@ -38,6 +38,7 @@ async function logout() {
         <div class="nav__links">
           <NuxtLink to="/logs">Logs</NuxtLink>
           <NuxtLink to="/map">Map</NuxtLink>
+          <NuxtLink to="/voyage">Voyage</NuxtLink>
           <NuxtLink to="/probe">Probe</NuxtLink>
           <NuxtLink v-if="store.isAdmin" to="/settings">Settings</NuxtLink>
           <NuxtLink v-else to="/admin/login">Admin</NuxtLink>

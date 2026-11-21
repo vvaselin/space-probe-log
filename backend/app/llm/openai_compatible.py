@@ -17,16 +17,19 @@ def normalize_generated_log_payload(data: dict[str, Any], fallback_summary: str)
 
 
 class OpenAICompatibleLLMClient:
-    def __init__(self, api_key: str, base_url: str, model: str) -> None:
+    def __init__(self, api_key: str | None, base_url: str, model: str, timeout: float = 30) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.timeout = timeout
 
-    async def _complete_json(self, system: str, payload: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30) as client:
+    async def complete_json(self, system: str, payload: dict[str, Any]) -> dict[str, Any]:
+        # APIキーの要らないローカルLLM（Ollama、LM Studio、llama.cpp）では Authorization を付けない。
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers=headers,
                 json={
                     "model": self.model,
                     "response_format": {"type": "json_object"},
@@ -37,12 +40,14 @@ class OpenAICompatibleLLMClient:
                 },
             )
             response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
+        content = response.json()["choices"][0]["message"]["content"].strip()
+        # 小さいモデルは ```json で囲んで返すことがある。
+        content = content.removeprefix("```json").removeprefix("```").removesuffix("```")
         return json.loads(content)
 
     async def propose_action(self, context: ActionContext) -> ProposedAction:
         prompts = context.prompt_settings
-        data = await self._complete_json(
+        data = await self.complete_json(
             "Return only JSON with keys: action, target_id, reason. You are OVIS aboard INSOMNIA-07. "
             "You may propose but never mutate state. Prefer known signal investigation before long-distance travel. "
             "If there are no visible_signals and navigation_targets is not empty, prefer move to one navigation target instead of repeating observe. "
@@ -55,7 +60,7 @@ class OpenAICompatibleLLMClient:
 
     async def generate_log(self, context: LogContext) -> GeneratedLog:
         prompts = context.prompt_settings
-        data = await self._complete_json(
+        data = await self.complete_json(
             "Return only JSON with exactly these keys: title, summary, body_markdown, reliability. "
             "Use only the mission_clock, simulation_datetime, navigation_state, physical distances, speeds, ETA, position, route, observations, interpretations, nearby_bodies, nearby_environment_objects, and route_context present in the payload. "
             "Do not invent distances, speeds, arrival times, or drive modes; those values are calculated by Python. "

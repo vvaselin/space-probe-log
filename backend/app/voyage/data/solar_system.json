@@ -1,0 +1,216 @@
+{
+  "sources": {
+    "planets": "JPL Approximate Positions of the Planets, Table 2a/2b (3000 BC - 3000 AD), https://ssd.jpl.nasa.gov/planets/approx_pos.html",
+    "small_bodies": "JPL Horizons osculating elements, heliocentric ecliptic J2000, epoch 2080-05-02 12:00 TDB (Pluto = system barycenter)",
+    "moons": "JPL Horizons state vectors relative to parent at 2080-05-02 12:00 TDB, reduced to a circular orbit",
+    "visual": "hand-written (radius km, geometric albedo from NASA fact sheets)"
+  },
+  "milestones": [
+    {"id": "sun_disk", "name": "太陽が円盤に見えなくなる", "r_au": 20.5},
+    {"id": "heliopause", "name": "ヘリオポーズを越える", "r_au": 120.0},
+    {"id": "light_day", "name": "光の信号なら地球まで片道1日を超える", "r_au": 173.1},
+    {"id": "sun_like_sirius", "name": "太陽がシリウスほどの明るさになる", "r_au": 113446.0}
+  ],
+  "destinations": [
+    {
+      "id": "sun", "name": "太陽", "subtype": "star", "radius_km": 696340, "abs_magnitude": 4.83,
+      "orbit": {"kind": "fixed"},
+      "visual": {"colors": ["白"], "pattern": "まぶしい光球。縁がわずかに暗い", "albedo": 0, "spectral_type": "G2V"}
+    },
+    {
+      "id": "mercury", "name": "水星", "subtype": "planet", "radius_km": 2439.7, "highlight": 0.3,
+      "orbit": {"kind": "jpl_planet", "a": [0.38709843, 0.0], "e": [0.20563661, 0.00002123], "i": [7.00559432, -0.00590158],
+        "mean_longitude": [252.25166724, 149472.67486623], "long_perihelion": [77.45771895, 0.15940013], "long_node": [48.33961819, -0.12214182]},
+      "visual": {"colors": ["灰色", "茶色がかった灰"], "pattern": "クレーターだらけの地表", "albedo": 0.142}
+    },
+    {
+      "id": "venus", "name": "金星", "subtype": "planet", "radius_km": 6051.8, "highlight": 0.5,
+      "orbit": {"kind": "jpl_planet", "a": [0.72332102, -0.00000026], "e": [0.00676399, -0.00005107], "i": [3.39777545, 0.00043494],
+        "mean_longitude": [181.97970850, 58517.81560260], "long_perihelion": [131.76755713, 0.05679648], "long_node": [76.67261496, -0.27274174]},
+      "visual": {"colors": ["淡い黄白色"], "pattern": "厚い雲に覆われ、のっぺりしている", "albedo": 0.689, "atmosphere": true}
+    },
+    {
+      "id": "earth", "name": "地球", "subtype": "planet", "radius_km": 6371.0, "highlight": 0.5,
+      "orbit": {"kind": "jpl_planet", "a": [1.00000018, -0.00000003], "e": [0.01673163, -0.00003661], "i": [-0.00054346, -0.01337178],
+        "mean_longitude": [100.46691572, 35999.37306329], "long_perihelion": [102.93005885, 0.31795260], "long_node": [-5.11260389, -0.24123856]},
+      "visual": {"colors": ["青", "白", "緑と茶"], "pattern": "青い海と白い雲の渦、大陸の緑と茶", "albedo": 0.434, "atmosphere": true, "moon_count": 1}
+    },
+    {
+      "id": "moon", "name": "月", "subtype": "moon", "radius_km": 1737.4, "parent_id": "earth", "highlight": 0.6,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 384759.0, "period_days": 27.27139,
+        "r0": [-0.914989, -0.403014, -0.019361], "normal": [0.018029, -0.088777, 0.995888]},
+      "visual": {"colors": ["灰色", "白"], "pattern": "暗い海と明るい高地、クレーター（ティコの光条など）", "albedo": 0.12}
+    },
+    {
+      "id": "mars", "name": "火星", "subtype": "planet", "radius_km": 3389.5, "highlight": 0.85,
+      "orbit": {"kind": "jpl_planet", "a": [1.52371243, 0.00000097], "e": [0.09336511, 0.00009149], "i": [1.85181869, -0.00724757],
+        "mean_longitude": [-4.56813164, 19140.29934243], "long_perihelion": [-23.91744784, 0.45223625], "long_node": [49.71320984, -0.26852431]},
+      "visual": {"colors": ["赤茶色", "白（極冠）"], "pattern": "赤茶けた砂漠と暗い模様、白い極冠", "albedo": 0.17, "atmosphere": true, "moon_count": 2}
+    },
+    {
+      "id": "phobos", "name": "フォボス", "subtype": "moon", "radius_km": 11.1, "parent_id": "mars", "highlight": 0.3,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 9330.7, "period_days": 0.31591,
+        "r0": [0.555108, -0.756694, -0.345354], "normal": [0.452567, -0.073594, 0.888688]},
+      "visual": {"colors": ["暗い灰色"], "pattern": "いびつなジャガイモ形。大きなクレーター（スティックニー）と細い溝", "albedo": 0.071}
+    },
+    {
+      "id": "ceres", "name": "ケレス", "subtype": "dwarf_planet", "radius_km": 469.7, "highlight": 0.5,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 2.7693208, "e": 0.0766585, "i_deg": 10.5693447,
+        "node_deg": 79.3556351, "peri_deg": 75.8219400, "mean_anomaly_deg": 166.9792134, "mean_motion_deg_per_day": 0.21386719},
+      "visual": {"colors": ["暗い灰色", "白い斑点"], "pattern": "暗い地表に明るい白い斑点（オッカトル・クレーター）", "albedo": 0.09}
+    },
+    {
+      "id": "vesta", "name": "ベスタ", "subtype": "asteroid", "radius_km": 262.7, "highlight": 0.4,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 2.3618546, "e": 0.0903105, "i_deg": 7.1434781,
+        "node_deg": 103.2204494, "peri_deg": 152.4593008, "mean_anomaly_deg": 26.9477091, "mean_motion_deg_per_day": 0.27153408},
+      "visual": {"colors": ["灰色", "明るい灰色"], "pattern": "南極の巨大なクレーターと、赤道を巡る溝", "albedo": 0.42}
+    },
+    {
+      "id": "jupiter", "name": "木星", "subtype": "planet", "radius_km": 69911, "highlight": 1.0,
+      "orbit": {"kind": "jpl_planet", "a": [5.20248019, -0.00002864], "e": [0.04853590, 0.00018026], "i": [1.29861416, -0.00322699],
+        "mean_longitude": [34.33479152, 3034.90371757], "long_perihelion": [14.27495244, 0.18199196], "long_node": [100.29282654, 0.13024619],
+        "b": -0.00012452, "c": 0.06064060, "s": -0.35635438, "f": 38.35125000},
+      "visual": {"colors": ["淡い黄土色", "白", "赤茶"], "pattern": "淡い黄土色と白の縞、大赤斑", "albedo": 0.538, "atmosphere": true, "moon_count": 95,
+        "rings": {"prominent": false, "description": "ほとんど見えない細い環"}, "pole_ra_dec": [268.057, 64.495]}
+    },
+    {
+      "id": "io", "name": "イオ", "subtype": "moon", "radius_km": 1821.6, "parent_id": "jupiter", "highlight": 0.8,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 422580.5, "period_days": 1.776,
+        "r0": [-0.982181, -0.186684, -0.021685], "normal": [-0.015155, -0.036332, 0.999225]},
+      "visual": {"colors": ["黄色", "橙", "黒"], "pattern": "硫黄の黄色と橙に、黒い火山の斑点", "albedo": 0.63}
+    },
+    {
+      "id": "europa", "name": "エウロパ", "subtype": "moon", "radius_km": 1560.8, "parent_id": "jupiter", "highlight": 0.8,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 667706.5, "period_days": 3.51594,
+        "r0": [0.357469, 0.932852, 0.044747], "normal": [-0.021362, -0.039733, 0.998982]},
+      "visual": {"colors": ["白", "薄い茶色"], "pattern": "白い氷の表面に、茶色の筋が縦横に走る", "albedo": 0.67}
+    },
+    {
+      "id": "ganymede", "name": "ガニメデ", "subtype": "moon", "radius_km": 2634.1, "parent_id": "jupiter", "highlight": 0.6,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 1071757.7, "period_days": 7.17259,
+        "r0": [0.159045, -0.986859, -0.02852], "normal": [-0.015423, -0.031368, 0.999389]},
+      "visual": {"colors": ["灰色", "白"], "pattern": "暗い地域と、溝の走る明るい地域のまだら", "albedo": 0.43}
+    },
+    {
+      "id": "callisto", "name": "カリスト", "subtype": "moon", "radius_km": 2410.3, "parent_id": "jupiter", "highlight": 0.5,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 1883395.1, "period_days": 16.70087,
+        "r0": [-0.748666, 0.662878, 0.009574], "normal": [-0.013509, -0.029692, 0.999468]},
+      "visual": {"colors": ["暗い灰褐色", "白い点"], "pattern": "暗い地表に、明るいクレーターが一面に散らばる", "albedo": 0.22}
+    },
+    {
+      "id": "saturn", "name": "土星", "subtype": "planet", "radius_km": 58232, "highlight": 1.0,
+      "orbit": {"kind": "jpl_planet", "a": [9.54149883, -0.00003065], "e": [0.05550825, -0.00032044], "i": [2.49424102, 0.00451969],
+        "mean_longitude": [50.07571329, 1222.11494724], "long_perihelion": [92.86136063, 0.54179478], "long_node": [113.63998702, -0.25015002],
+        "b": 0.00025899, "c": -0.13434469, "s": 0.87320147, "f": 38.35125000},
+      "visual": {"colors": ["淡い黄土色", "クリーム色"], "pattern": "淡い黄土色のかすかな縞", "albedo": 0.499, "atmosphere": true, "moon_count": 146,
+        "rings": {"prominent": true, "description": "幅の広い明るい環（暗い隙間がある）"}, "pole_ra_dec": [40.589, 83.537]}
+    },
+    {
+      "id": "mimas", "name": "ミマス", "subtype": "moon", "radius_km": 198.2, "parent_id": "saturn", "highlight": 0.4,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 182803.4, "period_days": 0.91496,
+        "r0": [-0.9706, 0.240173, -0.015888], "normal": [0.104282, 0.479084, 0.871552]},
+      "visual": {"colors": ["灰白色"], "pattern": "巨大なクレーター（ハーシェル）が一つだけ目立つ", "albedo": 0.96}
+    },
+    {
+      "id": "enceladus", "name": "エンケラドゥス", "subtype": "moon", "radius_km": 252.1, "parent_id": "saturn", "highlight": 0.8,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 238957.0, "period_days": 1.38085,
+        "r0": [0.986779, -0.161692, -0.01108], "normal": [0.085683, 0.462432, 0.882505]},
+      "visual": {"colors": ["純白", "青白い筋"], "pattern": "真っ白な氷の地表、南極に青白い筋（タイガーストライプ）", "albedo": 1.0}
+    },
+    {
+      "id": "titan", "name": "タイタン", "subtype": "moon", "radius_km": 2574.7, "parent_id": "saturn", "highlight": 0.9,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 1256816.9, "period_days": 16.87755,
+        "r0": [-0.973544, -0.147476, 0.174534], "normal": [0.090048, 0.454396, 0.886237]},
+      "visual": {"colors": ["橙色", "黄土色"], "pattern": "厚いもやに覆われた、のっぺりした橙色", "albedo": 0.22, "atmosphere": true}
+    },
+    {
+      "id": "iapetus", "name": "イアペトゥス", "subtype": "moon", "radius_km": 734.5, "parent_id": "saturn", "highlight": 0.6,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 3652538.8, "period_days": 83.45966,
+        "r0": [-0.972385, 0.170699, 0.159153], "normal": [0.193195, 0.206158, 0.959257]},
+      "visual": {"colors": ["黒", "白"], "pattern": "片側が黒く、もう片側が白い二色の天体", "albedo": 0.3}
+    },
+    {
+      "id": "uranus", "name": "天王星", "subtype": "planet", "radius_km": 25362, "highlight": 0.95,
+      "orbit": {"kind": "jpl_planet", "a": [19.18797948, -0.00020455], "e": [0.04685740, -0.00001550], "i": [0.77298127, -0.00180155],
+        "mean_longitude": [314.20276625, 428.49512595], "long_perihelion": [172.43404441, 0.09266985], "long_node": [73.96250215, 0.05739699],
+        "b": 0.00058331, "c": -0.97731848, "s": 0.17689245, "f": 7.67025000},
+      "visual": {"colors": ["淡い青緑"], "pattern": "模様の少ない、のっぺりした青緑", "albedo": 0.488, "atmosphere": true, "moon_count": 28,
+        "rings": {"prominent": false, "description": "暗く細い環"}, "pole_ra_dec": [257.311, -15.175]}
+    },
+    {
+      "id": "miranda", "name": "ミランダ", "subtype": "moon", "radius_km": 235.8, "parent_id": "uranus", "highlight": 0.6,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 129992.7, "period_days": 1.41664,
+        "r0": [0.734105, -0.307387, -0.605478], "normal": [0.286792, 0.948594, -0.133862]},
+      "visual": {"colors": ["灰色"], "pattern": "継ぎはぎのような地形と、巨大な崖", "albedo": 0.32}
+    },
+    {
+      "id": "ariel", "name": "アリエル", "subtype": "moon", "radius_km": 578.9, "parent_id": "uranus", "highlight": 0.4,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 190733.4, "period_days": 2.5152,
+        "r0": [0.934493, -0.160447, 0.317774], "normal": [0.212026, 0.967922, -0.134802]},
+      "visual": {"colors": ["明るい灰色"], "pattern": "谷が走る明るい地表", "albedo": 0.53}
+    },
+    {
+      "id": "titania", "name": "チタニア", "subtype": "moon", "radius_km": 788.9, "parent_id": "uranus", "highlight": 0.4,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 436179.5, "period_days": 8.70202,
+        "r0": [-0.608129, 0.238551, 0.757148], "normal": [0.210335, 0.968112, -0.136081]},
+      "visual": {"colors": ["灰色", "わずかな赤み"], "pattern": "峡谷とクレーターの地表", "albedo": 0.35}
+    },
+    {
+      "id": "neptune", "name": "海王星", "subtype": "planet", "radius_km": 24622, "highlight": 1.0,
+      "orbit": {"kind": "jpl_planet", "a": [30.06952752, 0.00006447], "e": [0.00895439, 0.00000818], "i": [1.77005520, 0.00022400],
+        "mean_longitude": [304.22289287, 218.46515314], "long_perihelion": [46.68158724, 0.01009938], "long_node": [131.78635853, -0.00606302],
+        "b": -0.00041348, "c": 0.68346318, "s": -0.10162547, "f": 7.67025000},
+      "visual": {"colors": ["深い青", "白い雲"], "pattern": "深い青に白い雲の筋と暗い斑点", "albedo": 0.442, "atmosphere": true, "moon_count": 16,
+        "rings": {"prominent": false, "description": "暗く細い環"}, "pole_ra_dec": [299.36, 43.46]}
+    },
+    {
+      "id": "triton", "name": "トリトン", "subtype": "moon", "radius_km": 1353.4, "parent_id": "neptune", "highlight": 0.8,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 354782.1, "period_days": 5.8776,
+        "r0": [-0.703402, -0.649529, 0.288682], "normal": [-0.649104, 0.421495, -0.63325]},
+      "visual": {"colors": ["ピンクがかった白", "灰色"], "pattern": "ピンクがかった極冠、メロンの皮のような地形、黒い噴出の筋", "albedo": 0.76, "atmosphere": true}
+    },
+    {
+      "id": "pluto", "name": "冥王星", "subtype": "dwarf_planet", "radius_km": 1188.3, "highlight": 0.8,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 39.652019, "e": 0.2472527, "i_deg": 17.1322729,
+        "node_deg": 110.1032557, "peri_deg": 115.0222768, "mean_anomaly_deg": 130.0555911, "mean_motion_deg_per_day": 0.0039473481},
+      "visual": {"colors": ["淡い茶色", "白", "赤茶"], "pattern": "白いハート形の平原と、赤茶色の地域", "albedo": 0.52, "atmosphere": true, "moon_count": 5}
+    },
+    {
+      "id": "charon", "name": "カロン", "subtype": "moon", "radius_km": 606.0, "parent_id": "pluto", "highlight": 0.5,
+      "orbit": {"kind": "circular", "epoch": "2080-05-02T12:00:00Z", "orbit_radius_km": 19596.2, "period_days": 6.38751,
+        "r0": [0.278704, -0.271496, -0.921203], "normal": [-0.678094, 0.623626, -0.388947]},
+      "visual": {"colors": ["灰色", "赤茶色（北極）"], "pattern": "灰色の地表、北極だけが赤茶色", "albedo": 0.36}
+    },
+    {
+      "id": "haumea", "name": "ハウメア", "subtype": "dwarf_planet", "radius_km": 780.0, "highlight": 0.6,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 43.4237533, "e": 0.1977278, "i_deg": 28.1320734,
+        "node_deg": 122.0326214, "peri_deg": 238.0766985, "mean_anomaly_deg": 294.6762074, "mean_motion_deg_per_day": 0.0034443957},
+      "visual": {"colors": ["白"], "pattern": "細長い楕円体の白い氷。表面の模様は分かっていない", "albedo": 0.66, "moon_count": 2,
+        "rings": {"prominent": false, "description": "暗く細い環"}}
+    },
+    {
+      "id": "makemake", "name": "マケマケ", "subtype": "dwarf_planet", "radius_km": 715.0, "highlight": 0.5,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 45.6495847, "e": 0.1605141, "i_deg": 28.9436592,
+        "node_deg": 79.4976092, "peri_deg": 294.4523558, "mean_anomaly_deg": 236.3650466, "mean_motion_deg_per_day": 0.0031955736},
+      "visual": {"colors": ["赤茶色"], "pattern": "赤みがかった明るい地表。表面の模様は分かっていない", "albedo": 0.81, "moon_count": 1}
+    },
+    {
+      "id": "eris", "name": "エリス", "subtype": "dwarf_planet", "radius_km": 1163.0, "highlight": 0.6,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 67.7437952, "e": 0.4359591, "i_deg": 43.9720256,
+        "node_deg": 35.9710431, "peri_deg": 151.5606025, "mean_anomaly_deg": 244.7351406, "mean_motion_deg_per_day": 0.0017676643},
+      "visual": {"colors": ["白"], "pattern": "とても明るい白い地表。表面の模様は分かっていない", "albedo": 0.96, "moon_count": 1}
+    },
+    {
+      "id": "sedna", "name": "セドナ", "subtype": "dwarf_planet", "radius_km": 497.0, "highlight": 0.7,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 481.2514951, "e": 0.8417091, "i_deg": 11.9525646,
+        "node_deg": 144.2852903, "peri_deg": 311.1692047, "mean_anomaly_deg": 0.1545937, "mean_motion_deg_per_day": 0.0000933568},
+      "visual": {"colors": ["赤"], "pattern": "太陽系で最も赤い天体の一つ。表面の模様は分かっていない", "albedo": 0.32}
+    },
+    {
+      "id": "arrokoth", "name": "アロコス", "subtype": "kuiper_belt_object", "radius_km": 9.0, "highlight": 0.6,
+      "orbit": {"kind": "kepler", "epoch": "2080-05-02T12:00:00Z", "a_au": 44.4798441, "e": 0.0436901, "i_deg": 2.4477722,
+        "node_deg": 159.0094623, "peri_deg": 183.3008514, "mean_anomaly_deg": 22.2010104, "mean_motion_deg_per_day": 0.0033224556},
+      "visual": {"colors": ["赤茶色"], "pattern": "二つの平たい塊がくっついた雪だるま形", "albedo": 0.21}
+    }
+  ]
+}
