@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     default_world_seed: str = "sol-neighborhood-001"
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = "gpt-6-luna"
     prompt_dir: str = "app/prompts"
     admin_username: str = "admin"
     admin_password_hash: str | None = None
