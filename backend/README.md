@@ -52,12 +52,12 @@ API は `app/api/voyage.py` にあります（一覧は `README.md`）。LLM の
 
 - 航行のテストは `app/tests/test_voyage_*.py` です。
 - `app/tests/conftest.py` が、`.env` の設定に関係なく、すべてのテストでスケジューラを止め、LLM をモックにし、航行の DB をメモリ上に置きます。
-- `test_map_api.py` などの古いテストは、アプリ全体を起動して `DATABASE_URL` の DB に書き込みます。全体を流す時は、`DATABASE_URL` を一時的な DB に向けてください。
+- `test_admin_auth.py` はアプリ全体を起動するので、起動時の処理が `DATABASE_URL` の DB にテーブルを作ります（足りないテーブルを作るだけで、データは消しません）。気になる時は、`DATABASE_URL` を一時的な DB に向けて流してください。
 
 ```bash
 DATABASE_URL=sqlite:///./tmp_test.db .venv/Scripts/python -m pytest
 ```
 
-## 古い仕組み
+## 古いデータ
 
-再設計の前のシミュレーション（`app/services/simulation.py`、`navigation.py`、`app/world/generator.py`、`app/prompts/*.md`、`/api/simulation/*`・`/api/world/*`・`/api/probe`・`/api/logs`・`/api/settings/*`）は残っていますが、画面からは使われていません。古いスケジューラは既定で止めています（`SIMULATION_SCHEDULER_ENABLED=false`）。
+再設計の前のシミュレーションのコードは消しました。`app/models/entities.py` には、管理者のセッション（`AdminSession`）のほかに、当時のテーブルの定義が残っています。アプリ本体の DB の古いデータ（古いログなど）を消さずに読めるようにするためと、`alembic/` の移行がこれらを使うためです。

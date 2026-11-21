@@ -168,6 +168,6 @@ docker compose exec backend python -m app.voyage.cli clock --mode auto --db sqli
 | `POST /api/voyage/clock/pause`、`/resume` | 一時停止と再開（管理者） |
 | `POST /api/voyage/step` | 次の場面へ進め、ログを1本書く（管理者） |
 
-## 古い仕組み
+## 古いデータ
 
-再設計の前のシミュレーション（`backend/app/services/simulation.py` などの古い航行、`/api/simulation/*`・`/api/world/*`・`/api/probe`・`/api/logs` の API、`frontend/components/SpaceMap.vue`、`/probe` と `/settings` の画面）は、コードとテストが残っています。画面からはつながっておらず、古いスケジューラも既定で止めています（`SIMULATION_SCHEDULER_ENABLED=false`）。新しい仕組みを本番で確かめたあとに消す予定です。
+再設計の前のシミュレーションのコードは消しました。アプリ本体の DB（`DATABASE_URL`）には、当時のテーブル（古いログなど）が残っています。テーブルの定義は `backend/app/models/entities.py` に残してあり、データは消していません。

@@ -27,6 +27,7 @@ npm.cmd test
 
 | ファイル | 内容 |
 | --- | --- |
+| `stores/admin.ts` | 管理者のセッション（ログイン、ログアウト、CSRF トークン） |
 | `stores/voyage.ts` | 同期の材料（区間の式、時刻表、軌道要素、時計）とログを、画面全体で1つだけ持つ。サーバーとの時計の差を測り、数秒かけて寄せる |
 | `utils/voyage/` | バックエンドと同じ式（軌道、区間、時刻表の補間）と、物理座標から表示座標への変換 |
 | `components/VoyageMap.vue` | 地図。位置は毎フレーム計算し、式の更新でずれた時は 1.5 秒かけて寄せる |
@@ -35,7 +36,3 @@ npm.cmd test
 | `tests/voyage.test.ts`、`tests/golden/voyage.json` | バックエンドの答えとの照らし合わせ。答えは backend の `python -m app.voyage.golden` で書き出す |
 
 `utils/voyage/` のファイルは、Node のテストからも読めるよう、`.ts` の拡張子つきで import し合っています（`tsconfig.json` の `allowImportingTsExtensions`）。
-
-## 古い仕組み
-
-`components/SpaceMap.vue`、`composables/useProbeMotion.ts`、`stores/mission.ts` の古い部分、`/probe` と `/settings` の画面は、再設計の前のシミュレーション用です。ナビからは外していますが、コードは残っています。
