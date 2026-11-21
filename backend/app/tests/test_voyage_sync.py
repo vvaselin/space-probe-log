@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.api import voyage as voyage_api
 from app.llm.mock import MockVoyageLLM
 from app.voyage.orbits import norm, sub
-from app.voyage.service import create_voyage, latest_voyage, load_legs, step
+from app.voyage.service import create_voyage, current_logs, ensure_voyage, latest_voyage, load_legs, rewrite, step
 from app.voyage.store import open_session
 from app.voyage.sync import TimetablePoint, build_timetable, monotone_cubic, probe_position, sim_time_at, start_of
 from app.voyage.world import load_world
@@ -104,3 +104,32 @@ def test_api_says_when_there_is_no_voyage(tmp_path: Path) -> None:
     app.include_router(voyage_api.router)
     app.dependency_overrides[voyage_api.get_voyage_db] = lambda: empty
     assert TestClient(app).get("/api/voyage/sync").status_code == 404
+
+
+def _client(db: Session) -> TestClient:
+    app = FastAPI()
+    app.include_router(voyage_api.router)
+    app.dependency_overrides[voyage_api.get_voyage_db] = lambda: db
+    return TestClient(app)
+
+
+async def test_logs_api_lists_latest_revisions_newest_first(db: Session) -> None:
+    await _stepped(db, 3)
+    voyage = latest_voyage(db)
+    assert voyage is not None
+    first = current_logs(db, voyage.id)[0]
+    await rewrite(db, first.id, MockVoyageLLM("log"))
+    client = _client(db)
+    items = client.get("/api/voyage/logs").json()
+    assert [item["log_number"] for item in items] == [3, 2, 1]
+    assert items[-1]["revision"] == 2 and items[0]["scene"]
+    detail = client.get("/api/voyage/logs/1").json()
+    assert detail["revision"] == 2 and "LOG #001" in detail["body_markdown"]
+    assert detail["visible"] and detail["speed"]["state"] and detail["next_destination"]["name"]
+    assert client.get("/api/voyage/logs/99").status_code == 404
+
+
+def test_ensure_voyage_creates_only_one(db: Session) -> None:
+    first = ensure_voyage(db, "seed-a")
+    second = ensure_voyage(db, "seed-b")
+    assert first.id == second.id and second.seed == "seed-a"

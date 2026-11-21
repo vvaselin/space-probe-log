@@ -1,16 +1,9 @@
 from typing import Literal
 
 from app.core.config import Settings, get_settings
-from app.llm.client import JsonLLM, LLMClient
-from app.llm.mock import MockLLMClient, MockVoyageLLM
+from app.llm.client import JsonLLM
+from app.llm.mock import MockVoyageLLM
 from app.llm.openai_compatible import OpenAICompatibleLLMClient
-
-
-def get_llm_client() -> LLMClient:
-    settings = get_settings()
-    if settings.openai_api_key:
-        return OpenAICompatibleLLMClient(settings.openai_api_key, settings.openai_base_url, settings.openai_model)
-    return MockLLMClient()
 
 
 def get_voyage_llm(purpose: Literal["route", "log"], seed: str = "", settings: Settings | None = None) -> JsonLLM:

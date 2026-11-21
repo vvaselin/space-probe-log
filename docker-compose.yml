@@ -8,6 +8,7 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: sqlite:////data/space_probe_log.db
+      VOYAGE_DATABASE_URL: sqlite:////data/voyage.db
       CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
       DEFAULT_WORLD_SEED: sol-neighborhood-001
     volumes:

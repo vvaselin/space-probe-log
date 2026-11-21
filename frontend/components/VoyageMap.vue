@@ -184,12 +184,11 @@ onBeforeUnmount(() => dispose?.())
 </template>
 
 <style scoped>
+/* 高さは置く側が決める（ダッシュボードは画面いっぱい、/map は枠の中） */
 .voyage-map {
   width: 100%;
-  height: 70vh;
-  min-height: 420px;
-  border: 1px solid #1c2a44;
-  border-radius: 6px;
+  height: 100%;
+  min-height: 320px;
   overflow: hidden;
 }
 </style>

@@ -14,9 +14,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.models.entities import MISSION_START_AT
 from app.voyage.cli import mock_chooser, simulate_route
-from app.voyage.route import start_position
+from app.voyage.route import START_AT, start_position
 from app.voyage.sync import body_payload, leg_formula, monotone_cubic, probe_position
 from app.voyage.world import load_world, position_au
 
@@ -38,8 +37,8 @@ def _iso(t: datetime) -> str:
 
 async def build() -> dict[str, Any]:
     world = load_world()
-    legs = await simulate_route(8, MISSION_START_AT, mock_chooser("golden"))
-    start = start_position(world, MISSION_START_AT)
+    legs = await simulate_route(8, START_AT, mock_chooser("golden"))
+    start = start_position(world, START_AT)
     leg_samples = []
     for leg in legs:
         for f in LEG_FRACTIONS:

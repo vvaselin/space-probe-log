@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from app.voyage.scenes import Scene, leg_scenes
 from app.voyage.world import Destination, World, position_au
 
 START_ID = "earth"
+START_AT = datetime(2080, 5, 2, 12, 0, tzinfo=UTC)  # 出発（地球の夜側から）
 MAIN_MIN_FACTOR = 1.5
 MAIN_MAX_FACTOR = 3.0
 MIN_STEP_AU = 0.5

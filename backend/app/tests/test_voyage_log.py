@@ -6,9 +6,8 @@ from app.core.config import Settings
 from app.llm.factory import get_voyage_llm
 from app.llm.mock import MockVoyageLLM
 from app.llm.openai_compatible import OpenAICompatibleLLMClient
-from app.models.entities import MISSION_START_AT
 from app.voyage.llm import llm_chooser, validate_log_answer, write_log
-from app.voyage.route import plan_leg
+from app.voyage.route import START_AT, plan_leg
 from app.voyage.service import create_voyage, current_logs, load_legs, rewrite, step
 from app.voyage.store import LogRecord, open_session
 from app.voyage.world import load_world
@@ -113,7 +112,7 @@ def test_literal_backslash_n_in_body_becomes_a_newline() -> None:
 
 async def test_route_answer_outside_the_offer_uses_the_top_candidate() -> None:
     llm = ScriptedLLM([{"choice": 9, "reason": "?"}, {"choice": "1"}])
-    leg = await plan_leg(load_world(), [], MISSION_START_AT, llm_chooser(llm, load_world()))
+    leg = await plan_leg(load_world(), [], START_AT, llm_chooser(llm, load_world()))
     assert leg is not None and leg.planning.fell_back is True
     assert leg.target.id == leg.planning.candidates[0].id
     assert len(leg.planning.llm_raw["attempts"]) == 2
@@ -139,6 +138,6 @@ def test_llm_provider_is_chosen_explicitly_per_purpose() -> None:
 async def _sample_payload() -> dict[str, Any]:
     from app.voyage.service import build_log_payload
 
-    leg = await plan_leg(load_world(), [], MISSION_START_AT, llm_chooser(MockVoyageLLM("route"), load_world()))
+    leg = await plan_leg(load_world(), [], START_AT, llm_chooser(MockVoyageLLM("route"), load_world()))
     assert leg is not None
-    return build_log_payload(load_world(), MISSION_START_AT, [leg], 0, 0, 1, {}, [])
+    return build_log_payload(load_world(), START_AT, [leg], 0, 0, 1, {}, [])

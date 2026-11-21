@@ -17,11 +17,10 @@ from datetime import datetime
 from app.core.config import get_settings
 from app.llm.factory import get_voyage_llm
 from app.llm.mock import MockVoyageLLM
-from app.models.entities import MISSION_START_AT
 from app.voyage import clock
 from app.voyage.llm import llm_chooser
 from app.voyage.orbits import AU_KM, norm
-from app.voyage.route import INWARD_LIMIT, LEG_KIND_LABELS, Chooser, Leg, plan_leg
+from app.voyage.route import INWARD_LIMIT, LEG_KIND_LABELS, START_AT, Chooser, Leg, plan_leg
 from app.voyage.scenes import SCENE_LABELS
 from app.voyage.service import create_voyage, latest_voyage, rewrite, step
 from app.voyage.store import open_session
@@ -168,7 +167,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "route-table":
-        legs = asyncio.run(simulate_route(args.legs, MISSION_START_AT, mock_chooser(args.seed)))
+        legs = asyncio.run(simulate_route(args.legs, START_AT, mock_chooser(args.seed)))
         print_route_table(legs)
         if len(legs) < args.legs:
             print(f"候補がなくなったため {len(legs)} 区間で終了（空白を埋める生成は今回の範囲外）")

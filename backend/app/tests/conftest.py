@@ -22,9 +22,14 @@ def db() -> Session:
 
 @pytest.fixture(autouse=True)
 def no_voyage_scheduler_or_real_llm() -> Generator[None, None, None]:
-    # .env の設定に関係なく、テストでは航行のスケジューラを動かさず、本物のLLMも呼ばない
+    # .env の設定に関係なく、テストでは航行のスケジューラを動かさず、本物のLLMも呼ばず、航行のDBにも触れない
     settings = get_settings()
-    overrides = {"voyage_scheduler_enabled": False, "voyage_llm_route_provider": "mock", "voyage_llm_log_provider": "mock"}
+    overrides = {
+        "voyage_scheduler_enabled": False,
+        "voyage_llm_route_provider": "mock",
+        "voyage_llm_log_provider": "mock",
+        "voyage_database_url": "sqlite://",
+    }
     previous = {key: getattr(settings, key) for key in overrides}
     for key, value in overrides.items():
         setattr(settings, key, value)
