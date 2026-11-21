@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
@@ -99,9 +100,18 @@ def _first_published_at(db: Session, voyage_id: int) -> dict[int, datetime]:
 
 
 def build_timetable(
-    db: Session, voyage: VoyageRecord, world: World, legs: list[Leg], publish_interval_s: float
+    db: Session,
+    voyage: VoyageRecord,
+    world: World,
+    legs: list[Leg],
+    publish_interval_s: float,
+    pauses: Sequence[tuple[datetime, datetime | None]] = (),
 ) -> list[TimetablePoint]:
-    """公開したログの直近の点と、次の公開の予定（最後の公開＋間隔、次の場面）。"""
+    """公開したログの直近の点と、次の公開の予定（最後の公開＋間隔＋停止していた時間、次の場面）。
+
+    一時停止は「時間が進まない区間」として、同じシミュレーション時刻の2点を入れる（11章）。
+    止まっている最中は、止めた時点の点で終わる（その位置で待つ）。
+    """
     published_at = _first_published_at(db, voyage.id)
     logs = db.scalars(
         select(LogRecord).where(LogRecord.voyage_id == voyage.id, LogRecord.revision == 1).order_by(LogRecord.log_number)
@@ -125,14 +135,24 @@ def build_timetable(
     upcoming = next((s for li, si, s in scenes if last_key is None or (li, si) > last_key), None)
     if upcoming is not None:
         base = points[-1].real_at if points else _utc(voyage.created_at)
-        points.append(
-            TimetablePoint(
-                real_at=base + timedelta(seconds=publish_interval_s),
+        shift = 0.0
+
+        def planned() -> TimetablePoint:
+            return TimetablePoint(
+                real_at=base + timedelta(seconds=publish_interval_s + shift),
                 sim_at=upcoming.at,
                 label=label(upcoming.kind, upcoming.subject_id),
                 published=False,
             )
-        )
+
+        for start, end in pauses:
+            held = sim_time_at([*points, planned()], start)
+            points.append(TimetablePoint(real_at=start, sim_at=held, label="一時停止", published=True))
+            if end is None:
+                return points
+            points.append(TimetablePoint(real_at=end, sim_at=held, label="再開", published=True))
+            shift += (end - start).total_seconds()
+        points.append(planned())
     if not points:
         points.append(TimetablePoint(real_at=_utc(voyage.created_at), sim_at=voyage.start_at_utc, label="出発前", published=False))
     return points

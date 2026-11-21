@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import engine
 from app.services.scheduler import run_simulation_scheduler
+from app.voyage.scheduler import run_voyage_scheduler
 
 LOGGER = logging.getLogger(__name__)
 
@@ -25,12 +26,14 @@ async def lifespan(app: FastAPI):
         if settings.simulation_scheduler_enabled
         else None
     )
+    voyage_task = asyncio.create_task(run_voyage_scheduler(stop_event)) if settings.voyage_scheduler_enabled else None
     try:
         yield
     finally:
-        if scheduler_task is not None:
-            stop_event.set()
-            await scheduler_task
+        stop_event.set()
+        for task in (scheduler_task, voyage_task):
+            if task is not None:
+                await task
 
 
 def create_app() -> FastAPI:

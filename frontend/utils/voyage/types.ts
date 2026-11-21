@@ -64,6 +64,16 @@ export type LegFormula = { index: number; target_id: string; profile: LegProfile
 
 export type TimetablePoint = { real_at: string; sim_at: string; label: string; published: boolean }
 
+export type VoyageClock = {
+  mode: 'auto' | 'manual'
+  interval_seconds: number
+  paused: boolean
+  paused_at: string | null
+  last_published_at: string | null
+  next_publish_at: string
+  ended: boolean
+}
+
 export type VoyageSync = {
   server_time: string
   voyage_id: number
@@ -71,6 +81,9 @@ export type VoyageSync = {
   timetable: TimetablePoint[]
   legs: LegFormula[]
   bodies: VoyageBody[]
+  clock: VoyageClock
 }
+
+export type VoyageStepResult = { log_id: number; log_number: number; title: string; scene: string; fallback: boolean }
 
 export type VoyagePosition = { real_at: string; sim_at: string; position_au: Vec3; leg_index: number | null }

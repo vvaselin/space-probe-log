@@ -1,5 +1,5 @@
 import type { AdminSession, LogDetail, LogListItem, MapPayload, Probe, ProbeNavigation, ProbeSpecification, PromptSettings, SimulationClock, SimulationSettings, SimulationSettingsUpdate, SimulationStep, SimulationTick, StarSystem } from '~/types/api'
-import type { VoyagePosition, VoyageSync } from '~/utils/voyage/types'
+import type { VoyageClock, VoyagePosition, VoyageStepResult, VoyageSync } from '~/utils/voyage/types'
 
 export function useApi() {
   const config = useRuntimeConfig()
@@ -31,6 +31,11 @@ export function useApi() {
     getMap: () => request<MapPayload>('/api/world/map'),
     getVoyageSync: () => request<VoyageSync>('/api/voyage/sync'),
     getVoyagePosition: (realAt: string) => request<VoyagePosition>(`/api/voyage/position?real_at=${encodeURIComponent(realAt)}`),
+    updateVoyageClock: (payload: { mode?: VoyageClock['mode']; interval_seconds?: number }, csrfToken: string) =>
+      request<VoyageClock>('/api/voyage/clock', { method: 'PATCH', body: JSON.stringify(payload), csrfToken }),
+    pauseVoyage: (csrfToken: string) => request<VoyageClock>('/api/voyage/clock/pause', { method: 'POST', csrfToken }),
+    resumeVoyage: (csrfToken: string) => request<VoyageClock>('/api/voyage/clock/resume', { method: 'POST', csrfToken }),
+    stepVoyage: (csrfToken: string) => request<VoyageStepResult>('/api/voyage/step', { method: 'POST', csrfToken }),
     getPrompts: () => request<PromptSettings>('/api/settings/prompts'),
     getSimulationSettings: () => request<SimulationSettings>('/api/settings/simulation'),
     saveSimulationSettings: (payload: SimulationSettingsUpdate, csrfToken: string) =>

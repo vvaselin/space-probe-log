@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.llm.factory import get_voyage_llm
 from app.llm.mock import MockVoyageLLM
 from app.models.entities import MISSION_START_AT
+from app.voyage import clock
 from app.voyage.llm import llm_chooser
 from app.voyage.orbits import AU_KM, norm
 from app.voyage.route import INWARD_LIMIT, LEG_KIND_LABELS, Chooser, Leg, plan_leg
@@ -115,6 +116,25 @@ async def _rewrite(db_url: str, log_id: int) -> None:
     print(f"(log id {record.id} / LOG #{record.log_number:03d} 第{record.revision}版)")
 
 
+def _clock(db_url: str, mode: str | None, interval: float | None, pause: bool, resume: bool) -> None:
+    db = open_session(db_url)
+    voyage = latest_voyage(db)
+    if voyage is None:
+        raise SystemExit(f"航海がありません。先に `new` を実行してください（DB: {db_url}）")
+    try:
+        clock.configure(db, voyage, mode="auto" if mode == "auto" else "manual" if mode else None, interval=interval)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if pause:
+        clock.pause(db, voyage)
+    if resume:
+        clock.resume(db, voyage)
+    s = clock.status(db, voyage)
+    last = f"{s.last_published_at:%Y-%m-%d %H:%M:%S} UTC" if s.last_published_at else "まだない"
+    print(f"航海 {voyage.id}：{'自動' if s.mode == 'auto' else '手動'}、間隔 {s.interval_seconds:g} 秒、{'一時停止中' if s.paused else '動いている'}")
+    print(f"最後の公開 {last} ／ 次の公開の予定 {s.next_publish_at:%Y-%m-%d %H:%M:%S} UTC{'（航路の端）' if s.ended else ''}")
+
+
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -124,7 +144,13 @@ def main(argv: list[str] | None = None) -> None:
     table = sub.add_parser("route-table", help="LLMなし（モック）で航路を計画して表に出す。DBは使わない")
     table.add_argument("--seed", default=settings.default_world_seed)
     table.add_argument("--legs", type=int, default=100)
-    for name, help_text in (("new", "航海を作る"), ("step", "次の場面へ進め、ログを書く"), ("rewrite", "ログだけを書き直す")):
+    commands = (
+        ("new", "航海を作る"),
+        ("step", "次の場面へ進め、ログを書く（時計のモードや一時停止に関係なく進める）"),
+        ("rewrite", "ログだけを書き直す"),
+        ("clock", "時計の状態を見る・変える"),
+    )
+    for name, help_text in commands:
         command = sub.add_parser(name, help=help_text)
         command.add_argument("--db", default=settings.voyage_debug_database_url, help="既定はデバッグ用DB")
         if name == "new":
@@ -133,6 +159,12 @@ def main(argv: list[str] | None = None) -> None:
             command.add_argument("--count", type=int, default=1)
         if name == "rewrite":
             command.add_argument("log_id", type=int)
+        if name == "clock":
+            command.add_argument("--mode", choices=["auto", "manual"], help="auto: 予定の時刻にスケジューラが進める")
+            command.add_argument("--interval", type=float, help="公開の間隔（秒）")
+            toggle = command.add_mutually_exclusive_group()
+            toggle.add_argument("--pause", action="store_true")
+            toggle.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
 
     if args.command == "route-table":
@@ -147,6 +179,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_step(args.db, args.count))
     elif args.command == "rewrite":
         asyncio.run(_rewrite(args.db, args.log_id))
+    elif args.command == "clock":
+        _clock(args.db, args.mode, args.interval, args.pause, args.resume)
 
 
 if __name__ == "__main__":

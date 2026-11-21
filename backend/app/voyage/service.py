@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.llm.client import JsonLLM
@@ -18,6 +19,10 @@ from app.voyage.scenes import SCENE_LABELS, SCENE_MEANINGS
 from app.voyage.store import LegRecord, LogRecord, VoyageRecord
 from app.voyage.visibility import Sighting, observe
 from app.voyage.world import World, position_au
+
+class StepConflictError(RuntimeError):
+    """同じ場面を2つの処理が同時に公開しようとした。"""
+
 
 RECENT_LOGS = 3
 PHRASE_WINDOW = 5
@@ -213,7 +218,12 @@ async def step(db: Session, voyage: VoyageRecord, world: World, route_llm: JsonL
         fallback=fallback,
     )
     db.add(record)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # 別のプロセス（スケジューラ、管理画面、CLI）が先に同じ場面を公開した。区間もログも残さない。
+        db.rollback()
+        raise StepConflictError(f"LOG #{log_number:03d} は別の処理で先に公開された") from exc
     return record
 
 

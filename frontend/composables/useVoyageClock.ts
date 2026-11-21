@@ -2,6 +2,7 @@ import { isoToMs } from '~/utils/voyage/orbits'
 import type { VoyageSync } from '~/utils/voyage/types'
 
 const REFRESH_MS = 60_000 // 時計合わせと、手動で進めた場面の取り込み
+const PAUSED_REFRESH_MS = 10_000
 const SLEW_MS = 3_000 // 時計の差が変わった時に、この時間をかけて寄せる
 
 /**
@@ -54,8 +55,10 @@ export function useVoyageClock() {
     if (timer) clearTimeout(timer)
     const upcoming = sync.value?.timetable.find((p) => !p.published)
     const untilUpcoming = upcoming ? isoToMs(upcoming.real_at) - now() + 2_000 : Infinity
+    // 一時停止中は、再開にすぐ気づけるよう短い間隔で取り直す
+    const idle = sync.value?.clock.paused ? PAUSED_REFRESH_MS : REFRESH_MS
     // 予定を過ぎてまだ公開されていない時は、ふだんの間隔で待つ
-    timer = setTimeout(refresh, untilUpcoming > 0 ? Math.max(1_000, Math.min(REFRESH_MS, untilUpcoming)) : REFRESH_MS)
+    timer = setTimeout(refresh, untilUpcoming > 0 ? Math.max(1_000, Math.min(idle, untilUpcoming)) : idle)
   }
 
   onMounted(refresh)

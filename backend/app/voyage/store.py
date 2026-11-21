@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.core.time import utcnow
@@ -60,6 +60,19 @@ class LogRecord(VoyageBase):
     llm_output: Mapped[dict[str, Any]] = mapped_column(JSON)
     fallback: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class VoyageClockRecord(VoyageBase):
+    """時計（10章）。公開のモードと間隔、一時停止。航海ごとに1行。"""
+
+    __tablename__ = "voyage_clocks"
+
+    voyage_id: Mapped[int] = mapped_column(ForeignKey("voyages.id"), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16), default="manual")
+    interval_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)  # 空なら設定の値
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pauses: Mapped[list[list[str]]] = mapped_column(JSON, default=list)  # 終わった停止区間 [開始, 終了]（ISO）
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 def _session_factory(url: str) -> sessionmaker[Session]:
